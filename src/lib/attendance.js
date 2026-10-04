@@ -12,10 +12,10 @@ export const SHIFT_CONFIG = {
 };
 
 export const OFFICE_LOCATION = {
-  lat: -6.2088,
-  lng: 106.8456,
-  name: 'Office HQ',
-  radiusMeters: 100,
+  lat: -7.838939394768131,
+  lng: 112.13145797288026,
+  name: 'Gudang Utama',
+  radiusMeters: 120,
 };
 
 export const CURRENT_WORKER = {
