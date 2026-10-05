@@ -32,6 +32,7 @@ export const OT_CONFIG = {
   ratePerHour: 50000,
   minMinutesToCount: 30,
   roundToMinutes: 15,
+  standardWorkHours: 8,
 };
 
 const STORAGE_KEY = 'gudangku_attendance_v1';
@@ -332,17 +333,7 @@ export function groupByDay(records, limitDays = 7) {
 
 // ============ OVERTIME ============
 
-// ============ OVERTIME ============
-
-export const OT_CONFIG = {
-  ratePerHour: 50000,
-  minMinutesToCount: 30,
-  roundToMinutes: 15,
-  standardWorkHours: 8,   // ← BARU: standar 8 jam kerja
-};
-
 // Hitung OT berdasarkan TOTAL JAM KERJA (bukan jam selesai shift)
-// Butuh clockInTs DAN clockOutTs
 export function calculateOvertime(clockInTs, clockOutTs) {
   if (!clockInTs || !clockOutTs) {
     return { ms: 0, minutes: 0, roundedMinutes: 0, cost: 0, isOT: false };
@@ -371,13 +362,6 @@ export function calculateOvertime(clockInTs, clockOutTs) {
     roundedMinutes,
     cost,
     isOT: roundedMinutes > 0,
-  };
-}
-  return {
-    roundedMinutes: totalRoundedMinutes,
-    totalMs: totalRoundedMinutes * 60 * 1000,
-    cost: totalCost,
-    daysWithOT,
   };
 }
 
