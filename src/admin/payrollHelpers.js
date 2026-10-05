@@ -115,14 +115,12 @@ export async function buildPayroll(monthTs = Date.now()) {
           if (ts > lateThreshold) daysLate++;
         }
         if (d.clockIn && d.clockOut) {
-          const inTs = new Date(d.clockIn.timestamp).getTime();
-          const outTs = new Date(d.clockOut.timestamp).getTime();
-          totalWorkedMs += outTs - inTs;
-          const ot = calculateOvertime(outTs);
-          if (ot.isOT) {
-            totalOTMinutes += ot.roundedMinutes;
-            totalOTCost += ot.cost;
-          }
+  const inTs = new Date(d.clockIn.timestamp).getTime();
+  const outTs = new Date(d.clockOut.timestamp).getTime();
+  totalWorkedMs += outTs - inTs;
+  const ot = calculateOvertime(inTs, outTs);  // ← BARU: kirim 2 parameter
+  // ...
+}
         }
       });
 
