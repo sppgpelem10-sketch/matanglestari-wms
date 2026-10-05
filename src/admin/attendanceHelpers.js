@@ -36,7 +36,9 @@ export function buildAttendanceLog(records) {
         b.clockIn && b.clockOut
           ? b.clockOut.timestamp - b.clockIn.timestamp
           : 0;
-      const ot = b.clockOut ? calculateOvertime(b.clockOut.timestamp) : null;
+      const ot = (b.clockIn && b.clockOut)
+  ? calculateOvertime(b.clockIn.timestamp, b.clockOut.timestamp)
+  : null;
       return {
         ...b,
         workedMs,
