@@ -29,13 +29,20 @@ function getMonthRange(monthTs) {
 }
 
 // Hitung OT dari clock-out timestamp
-function calculateOvertime(clockOutTs) {
-  const shiftEnd = new Date(clockOutTs);
-  shiftEnd.setHours(17, 0, 0, 0);
-  const diffMs = clockOutTs - shiftEnd.getTime();
-  if (diffMs <= 0) return { isOT: false, roundedMinutes: 0, cost: 0 };
-  const minutes = Math.floor(diffMs / 60000);
+function calculateOvertime(clockInTs, clockOutTs) {
+  if (!clockInTs || !clockOutTs) {
+    return { isOT: false, roundedMinutes: 0, cost: 0 };
+  }
+
+  const totalMs = clockOutTs - clockInTs;
+  const standardMs = 8 * 60 * 60 * 1000;
+  const otMs = Math.max(0, totalMs - standardMs);
+
+  if (otMs <= 0) return { isOT: false, roundedMinutes: 0, cost: 0 };
+
+  const minutes = Math.floor(otMs / 60000);
   if (minutes < 30) return { isOT: false, roundedMinutes: 0, cost: 0 };
+
   const roundedMinutes = Math.floor(minutes / 15) * 15;
   const cost = Math.round((roundedMinutes / 60) * 50000);
   return { isOT: roundedMinutes > 0, roundedMinutes, cost };
