@@ -332,77 +332,47 @@ export function groupByDay(records, limitDays = 7) {
 
 // ============ OVERTIME ============
 
-export function calculateOvertime(clockOutTs) {
-  if (!clockOutTs) {
+// ============ OVERTIME ============
+
+export const OT_CONFIG = {
+  ratePerHour: 50000,
+  minMinutesToCount: 30,
+  roundToMinutes: 15,
+  standardWorkHours: 8,   // ← BARU: standar 8 jam kerja
+};
+
+// Hitung OT berdasarkan TOTAL JAM KERJA (bukan jam selesai shift)
+// Butuh clockInTs DAN clockOutTs
+export function calculateOvertime(clockInTs, clockOutTs) {
+  if (!clockInTs || !clockOutTs) {
     return { ms: 0, minutes: 0, roundedMinutes: 0, cost: 0, isOT: false };
   }
 
-  const shiftEnd = getShiftEnd(clockOutTs);
-  const diffMs = clockOutTs - shiftEnd;
+  const totalMs = clockOutTs - clockInTs;
+  const standardMs = OT_CONFIG.standardWorkHours * 60 * 60 * 1000;
+  const otMs = Math.max(0, totalMs - standardMs);
 
-  if (diffMs <= 0) {
+  if (otMs <= 0) {
     return { ms: 0, minutes: 0, roundedMinutes: 0, cost: 0, isOT: false };
   }
 
-  const minutes = Math.floor(diffMs / 60000);
+  const minutes = Math.floor(otMs / 60000);
 
   if (minutes < OT_CONFIG.minMinutesToCount) {
-    return { ms: diffMs, minutes, roundedMinutes: 0, cost: 0, isOT: false };
+    return { ms: otMs, minutes, roundedMinutes: 0, cost: 0, isOT: false };
   }
 
   const roundedMinutes = Math.floor(minutes / OT_CONFIG.roundToMinutes) * OT_CONFIG.roundToMinutes;
   const cost = Math.round((roundedMinutes / 60) * OT_CONFIG.ratePerHour);
 
   return {
-    ms: diffMs,
+    ms: otMs,
     minutes,
     roundedMinutes,
     cost,
     isOT: roundedMinutes > 0,
   };
 }
-
-export function getTodayOT(records) {
-  const today = records.filter((r) => isSameDay(r.timestamp));
-  const clockOut = [...today].reverse().find((r) => r.type === 'clock-out');
-  if (!clockOut) {
-    return { ms: 0, minutes: 0, roundedMinutes: 0, cost: 0, isOT: false };
-  }
-  return calculateOvertime(clockOut.timestamp);
-}
-
-export function getMonthlyOT(records, refTs = Date.now()) {
-  const ref = new Date(refTs);
-  const monthStart = new Date(ref.getFullYear(), ref.getMonth(), 1).getTime();
-  const monthEnd = new Date(ref.getFullYear(), ref.getMonth() + 1, 0, 23, 59, 59, 999).getTime();
-
-  const monthRecords = records.filter(
-    (r) => r.timestamp >= monthStart && r.timestamp <= monthEnd
-  );
-
-  const byDay = {};
-  monthRecords.forEach((r) => {
-    const key = startOfDay(r.timestamp);
-    if (!byDay[key]) byDay[key] = { clockIn: null, clockOut: null };
-    if (r.type === 'clock-in') byDay[key].clockIn = r;
-    if (r.type === 'clock-out') byDay[key].clockOut = r;
-  });
-
-  let totalRoundedMinutes = 0;
-  let totalCost = 0;
-  let daysWithOT = 0;
-
-  Object.values(byDay).forEach((d) => {
-    if (d.clockOut) {
-      const ot = calculateOvertime(d.clockOut.timestamp);
-      if (ot.isOT) {
-        totalRoundedMinutes += ot.roundedMinutes;
-        totalCost += ot.cost;
-        daysWithOT++;
-      }
-    }
-  });
-
   return {
     roundedMinutes: totalRoundedMinutes,
     totalMs: totalRoundedMinutes * 60 * 1000,
