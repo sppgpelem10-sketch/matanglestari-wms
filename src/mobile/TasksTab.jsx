@@ -1,43 +1,20 @@
 // src/mobile/TasksTab.jsx
 import React, { useState, useEffect } from 'react';
 import {
-  MapPin, Phone, Boxes, Timer, CheckCircle2, Navigation,
+  MapPin, Phone, Boxes, Timer, CheckCircle2, Navigation, AlertTriangle,
 } from 'lucide-react';
 import { cn, Badge, Button, StatusBadge } from '../components/shared';
-import { TASKS } from '../lib/mockData';
+import { useDriverTasks } from '../hooks/useDriverTasks';
+import PODSheet from './PODSheet';
 
-const TASKS_STORAGE_KEY = 'gudangku_tasks_v1';
-
-function loadTasks() {
-  try {
-    const raw = localStorage.getItem(TASKS_STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch {}
-  const initial = TASKS.map((t) =>
-    t.status === 'In Progress'
-      ? { ...t, startedAt: Date.now() - 23 * 60 * 1000 }
-      : t
-  );
-  return initial;
-}
-
-function saveTasks(tasks) {
-  try {
-    localStorage.setItem(TASKS_STORAGE_KEY, JSON.stringify(tasks));
-  } catch {}
-}
-
-export default function TasksTab({ onFinish }) {
-  const [tasks, setTasks] = useState(() => loadTasks());
+export default function TasksTab() {
+  const { tasks, loading, error, refetch, startTask, completeTask } = useDriverTasks();
   const [filter, setFilter] = useState('Semua');
   const [tick, setTick] = useState(0);
   const [toast, setToast] = useState(null);
-  const [finishTarget, setFinishTarget] = useState(null);
+  const [podTarget, setPodTarget] = useState(null);
 
-  useEffect(() => {
-    saveTasks(tasks);
-  }, [tasks]);
-
+  // Timer tick
   useEffect(() => {
     const t = setInterval(() => setTick((x) => x + 1), 1000);
     return () => clearInterval(t);
@@ -57,6 +34,7 @@ export default function TasksTab({ onFinish }) {
   });
 
   const fmt = (ms) => {
+    if (!ms || ms < 0) return '00:00:00';
     const s = Math.floor(ms / 1000);
     const h = Math.floor(s / 3600);
     const m = Math.floor((s % 3600) / 60);
@@ -64,50 +42,46 @@ export default function TasksTab({ onFinish }) {
     return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
   };
 
-  const handleStart = (taskId) => {
-    setTasks((prev) =>
-      prev.map((t) =>
-        t.id === taskId
-          ? { ...t, status: 'In Progress', startedAt: Date.now() }
-          : t
-      )
-    );
-    showToast('Pengiriman dimulai');
+  const handleStart = async (task) => {
+    try {
+      await startTask(task.uuid);
+      showToast('Pengiriman dimulai');
+    } catch (err) {
+      alert('Gagal: ' + err.message);
+    }
   };
 
-  // Ketika klik SELESAIKAN → buka POD sheet (JANGAN langsung complete)
   const handleFinishClick = (task) => {
-    setFinishTarget(task);
+    setPodTarget(task);
   };
 
-  // Callback dari POD sheet setelah submit berhasil
-  const handlePODComplete = (taskId, podData) => {
-    const now = new Date();
-    const completedAt = now.toLocaleTimeString('id-ID', {
-      hour: '2-digit',
-      minute: '2-digit',
-    });
+  const handlePODComplete = async (taskId, podData) => {
+    const task = tasks.find((t) => t.id === taskId);
+    if (!task) return;
+    try {
+      await completeTask(task.uuid, podData);
+      setPodTarget(null);
+      showToast('Tugas berhasil diselesaikan!');
+    } catch (err) {
+      alert('Gagal menyelesaikan: ' + err.message);
+    }
+  };
 
-    setTasks((prev) =>
-      prev.map((t) =>
-        t.id === taskId
-          ? {
-              ...t,
-              status: 'Completed',
-              completedAt,
-              pod: podData, // simpan ttd + foto + catatan
-            }
-          : t
-      )
+  if (loading && tasks.length === 0) {
+    return (
+      <div className="p-5 space-y-4">
+        <div className="pt-2">
+          <h1 className="text-xl font-bold text-slate-900">Tugas Pengiriman</h1>
+        </div>
+        <div className="flex items-center justify-center py-20">
+          <div className="text-center">
+            <div className="w-8 h-8 border-2 border-brand-600 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+            <p className="text-sm text-slate-500">Memuat tugas...</p>
+          </div>
+        </div>
+      </div>
     );
-
-    setFinishTarget(null);
-    showToast('Tugas berhasil diselesaikan!');
-  };
-
-  const handlePODCancel = () => {
-    setFinishTarget(null);
-  };
+  }
 
   return (
     <div className="p-5 space-y-4">
@@ -118,6 +92,12 @@ export default function TasksTab({ onFinish }) {
           {tasks.filter((t) => t.status === 'Completed').length} selesai
         </p>
       </div>
+
+      {error && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-xs text-red-800">
+          ⚠️ Error: {error}
+        </div>
+      )}
 
       {/* Filter pills */}
       <div className="flex gap-2 overflow-x-auto pb-1">
@@ -141,11 +121,21 @@ export default function TasksTab({ onFinish }) {
       <div className="space-y-3">
         {filtered.length === 0 ? (
           <div className="bg-white rounded-xl border border-slate-200 p-8 text-center">
-            <p className="text-xs text-slate-500">Tidak ada tugas di kategori ini</p>
+            <CheckCircle2 className="w-10 h-10 text-slate-300 mx-auto mb-2" />
+            <p className="text-sm font-semibold text-slate-900">
+              {tasks.length === 0 ? 'Belum ada tugas' : 'Tidak ada tugas di kategori ini'}
+            </p>
+            <p className="text-xs text-slate-500 mt-1">
+              {tasks.length === 0
+                ? 'Tugas akan muncul setelah di-assign oleh admin.'
+                : 'Coba ubah filter'}
+            </p>
           </div>
         ) : (
           filtered.map((task) => {
-            const elapsedMs = task.startedAt ? Date.now() - task.startedAt : 0;
+            const elapsedMs = task.startedAt && task.status === 'In Progress'
+              ? Date.now() - task.startedAt
+              : 0;
 
             return (
               <div
@@ -162,29 +152,29 @@ export default function TasksTab({ onFinish }) {
                 <div className="flex items-start justify-between mb-3">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1">
-                      <span className="text-[10px] font-mono font-semibold text-slate-400">
-                        {task.id}
-                      </span>
+                      <span className="text-[10px] font-mono font-semibold text-slate-400">{task.id}</span>
                       <StatusBadge status={task.status} />
                     </div>
-                    <h3 className="text-sm font-semibold text-slate-900 truncate">
-                      {task.customer}
-                    </h3>
+                    <h3 className="text-sm font-semibold text-slate-900 truncate">{task.customer}</h3>
                   </div>
                 </div>
 
-                <div className="flex items-start gap-2 mb-3">
-                  <MapPin className="w-3.5 h-3.5 text-slate-400 mt-0.5 flex-shrink-0" />
-                  <p className="text-xs text-slate-600 leading-relaxed">{task.address}</p>
-                </div>
+                {task.address && (
+                  <div className="flex items-start gap-2 mb-3">
+                    <MapPin className="w-3.5 h-3.5 text-slate-400 mt-0.5 flex-shrink-0" />
+                    <p className="text-xs text-slate-600 leading-relaxed">{task.address}</p>
+                  </div>
+                )}
 
                 <div className="flex items-center gap-3 text-[10px] text-slate-500 mb-3">
                   <span className="flex items-center gap-1">
                     <Boxes className="w-3 h-3" /> {task.items} item
                   </span>
-                  <span className="flex items-center gap-1">
-                    <Phone className="w-3 h-3" /> {task.phone}
-                  </span>
+                  {task.phone && (
+                    <span className="flex items-center gap-1">
+                      <Phone className="w-3 h-3" /> {task.phone}
+                    </span>
+                  )}
                 </div>
 
                 {task.status === 'In Progress' && (
@@ -215,7 +205,7 @@ export default function TasksTab({ onFinish }) {
                     variant="primary"
                     className="w-full mt-1"
                     icon={Navigation}
-                    onClick={() => handleStart(task.id)}
+                    onClick={() => handleStart(task)}
                   >
                     Mulai Pengiriman
                   </Button>
@@ -226,24 +216,13 @@ export default function TasksTab({ onFinish }) {
                     <div className="flex items-center gap-2 text-emerald-600">
                       <CheckCircle2 className="w-4 h-4" />
                       <span className="text-xs font-medium">
-                        Selesai pukul {task.completedAt || '—'}
+                        Selesai {task.completedAt ? `pukul ${new Date(task.completedAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}` : ''}
                       </span>
                     </div>
-                    {task.pod && (
+                    {(task.podSignature || task.podPhoto) && (
                       <div className="flex items-center gap-3 text-[10px] text-slate-500">
-                        {task.pod.signature && (
-                          <span className="flex items-center gap-1 text-emerald-600">
-                            <CheckCircle2 className="w-3 h-3" /> TTD
-                          </span>
-                        )}
-                        {task.pod.photo && (
-                          <span className="flex items-center gap-1 text-emerald-600">
-                            <CheckCircle2 className="w-3 h-3" /> Foto
-                          </span>
-                        )}
-                        {task.pod.notes && (
-                          <span className="truncate">Catatan: {task.pod.notes}</span>
-                        )}
+                        {task.podSignature && <span className="text-emerald-600">✓ TTD</span>}
+                        {task.podPhoto && <span className="text-emerald-600">✓ Foto</span>}
                       </div>
                     )}
                   </div>
@@ -254,19 +233,12 @@ export default function TasksTab({ onFinish }) {
         )}
       </div>
 
-      {/* Debug reset */}
+      {/* Debug refresh (dev only) */}
       {import.meta.env.DEV && (
         <div className="pt-2 flex justify-center">
-          <button
-            onClick={() => {
-              if (confirm('Reset semua task ke kondisi awal?')) {
-                localStorage.removeItem(TASKS_STORAGE_KEY);
-                window.location.reload();
-              }
-            }}
-            className="text-[10px] text-slate-400 hover:text-red-500 underline"
-          >
-            Reset data tugas (debug)
+          <button onClick={refetch}
+            className="text-[10px] text-slate-400 hover:text-slate-600 underline">
+            Refresh (debug)
           </button>
         </div>
       )}
@@ -281,27 +253,14 @@ export default function TasksTab({ onFinish }) {
         </div>
       )}
 
-      {/* POD Sheet - hanya render kalau ada finishTarget */}
-      {finishTarget && (
-        <PODSheetWrapper
-          task={finishTarget}
+      {/* POD Sheet */}
+      {podTarget && (
+        <PODSheet
+          task={podTarget}
+          onClose={() => setPodTarget(null)}
           onComplete={handlePODComplete}
-          onCancel={handlePODCancel}
         />
       )}
     </div>
-  );
-}
-
-// Wrapper biar TasksTab gak perlu import PODSheet langsung
-import PODSheet from './PODSheet';
-
-function PODSheetWrapper({ task, onComplete, onCancel }) {
-  return (
-    <PODSheet
-      task={task}
-      onClose={onCancel}
-      onComplete={onComplete}
-    />
   );
 }

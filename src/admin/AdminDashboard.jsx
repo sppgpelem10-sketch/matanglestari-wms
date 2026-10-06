@@ -23,6 +23,7 @@ import { INVENTORY, ACTIVITY_FEED } from '../lib/mockData';
 import EmployeeManagement from './views/EmployeeManagement';
 import FinanceView from './views/FinanceView';
 import PayslipPage from './views/PayslipTemplate';
+import { printDocument } from '../components/DocumentTemplate';
 import LogisticsReview from './views/LogisticsReview';
 import { useAttendanceAdmin } from '../hooks/useAttendanceAdmin';
 import { supabase, isSupabaseEnabled } from '../lib/supabase';
@@ -628,7 +629,7 @@ function PayrollView() {
               </p>
               <p className="text-brand-700">5 slip gaji per lembar</p>
             </div>
-            <Button icon={Printer} onClick={() => window.print()}>Cetak Sekarang</Button>
+            <Button icon={Printer} onClick={printDocument}>Cetak Sekarang</Button>
           </div>
           <div className="bg-slate-100 rounded-lg p-4 overflow-auto" style={{ maxHeight: '600px' }}>
             <div style={{ transform: 'scale(0.55)', transformOrigin: 'top left', width: '215mm' }}>
@@ -644,11 +645,72 @@ function PayrollView() {
 // ============ LIVE WMS MONITOR ============
 
 function LiveWMSMonitor() {
+  const [totalStockValue, setTotalStockValue] = useState(0);
+  const [lowStockAlerts, setLowStockAlerts] = useState(0);
   const [feed, setFeed] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const fetchWMS = async () => {
+    if (!isSupabaseEnabled()) {
+      setLoading(false);
+      return;
+    }
+
+    try {
+      // 1. Inventory: total stock value + low stock
+      const { data: inv } = await supabase
+        .from('inventory')
+        .select('stock, min_stock, selling_price, purchase_price');
+
+      const totalVal = (inv || []).reduce((s, it) => {
+        const price = Number(it.selling_price || it.purchase_price || 0);
+        return s + Number(it.stock || 0) * price;
+      }, 0);
+      setTotalStockValue(totalVal);
+
+      const lowCount = (inv || []).filter(
+        (it) => Number(it.stock) < Number(it.min_stock || 50)
+      ).length;
+      setLowStockAlerts(lowCount);
+
+      // 2. Activity log
+      const { data: act } = await supabase
+        .from('activity_log')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(20);
+      setFeed(act || []);
+    } catch (err) {
+      console.error('[live-wms] fetch error:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    // Kosong dulu — nanti dari activity_log Supabase
-    setFeed([]);
+    fetchWMS();
+
+    if (!isSupabaseEnabled()) return;
+
+    const channel = supabase
+      .channel('live-wms-monitor')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'inventory' },
+        () => fetchWMS()
+      )
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'activity_log' },
+        (payload) => {
+          setFeed((prev) => [payload.new, ...prev].slice(0, 20));
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   return (
@@ -659,34 +721,83 @@ function LiveWMSMonitor() {
             <p className="text-xs text-slate-500 font-medium">Total Stock Value</p>
             <DollarSign className="w-4 h-4 text-slate-400" />
           </div>
-          <p className="text-3xl font-bold text-slate-900 tabular-nums">Rp 0</p>
+          <p className="text-3xl font-bold text-slate-900 tabular-nums">
+            {formatRupiah(totalStockValue)}
+          </p>
           <div className="flex items-center gap-1 mt-1 text-xs font-semibold text-slate-400">
-            Belum ada data
+            {totalStockValue > 0 ? 'Dari inventory aktif' : 'Belum ada data'}
           </div>
         </div>
+
         <div className="bg-white rounded-xl border border-slate-200 p-5">
           <div className="flex items-center justify-between mb-2">
             <p className="text-xs text-slate-500 font-medium">Low Stock Alerts</p>
             <AlertTriangle className="w-4 h-4 text-red-500" />
           </div>
-          <p className="text-3xl font-bold text-red-600 tabular-nums">0</p>
-          <p className="text-xs text-slate-500 mt-1">SKU di bawah minimum threshold</p>
+          <p className="text-3xl font-bold text-red-600 tabular-nums">
+            {lowStockAlerts}
+          </p>
+          <p className="text-xs text-slate-500 mt-1">
+            SKU di bawah minimum threshold
+          </p>
         </div>
       </div>
 
       <div className="bg-white rounded-xl border border-slate-200">
-        <div className="px-5 py-4 border-b border-slate-200 flex items-center gap-2">
-          <LiveDot />
-          <h3 className="text-sm font-semibold text-slate-900">Live Activity Feed</h3>
+        <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <LiveDot />
+            <h3 className="text-sm font-semibold text-slate-900">Live Activity Feed</h3>
+          </div>
+          <Badge variant="neutral">{feed.length} event</Badge>
         </div>
-        <div className="p-8 text-center text-xs text-slate-500">
-          Belum ada aktivitas
+        <div className="divide-y divide-slate-100">
+          {loading && feed.length === 0 && (
+            <div className="p-8 text-center text-xs text-slate-500">
+              Memuat aktivitas...
+            </div>
+          )}
+          {!loading && feed.length === 0 && (
+            <div className="p-8 text-center text-xs text-slate-500">
+              Belum ada aktivitas
+            </div>
+          )}
+          {feed.map((a) => (
+            <div
+              key={a.id}
+              className="flex items-start gap-3 px-5 py-3 hover:bg-slate-50"
+            >
+              <div className="w-8 h-8 rounded-full bg-brand-100 flex items-center justify-center text-xs font-bold text-brand-700 flex-shrink-0">
+                {(a.actor_name || 'SY').slice(0, 2).toUpperCase()}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm text-slate-900">{a.text}</p>
+                <div className="flex items-center gap-2 mt-0.5">
+                  <span className="text-[10px] font-mono text-slate-500">
+                    {a.type}
+                  </span>
+                  <span className="text-[10px] text-slate-400">·</span>
+                  <span className="text-[10px] text-slate-500">
+                    {a.actor_name || 'System'}
+                  </span>
+                  <span className="text-[10px] text-slate-400">·</span>
+                  <span className="text-[10px] text-slate-500">
+                    {new Date(a.created_at).toLocaleString('id-ID', {
+                      day: 'numeric',
+                      month: 'short',
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
+                  </span>
+                </div>
+              </div>
+            </div>
+          ))}
         </div>
       </div>
     </div>
   );
 }
-
 // ============ MAIN ============
 
 export default function AdminDashboard() {

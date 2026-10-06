@@ -1,18 +1,20 @@
 // src/admin/views/LogisticsReview.jsx
 // ============================================
 // Review Logistik — read-only view dari WMS
-// Inbound + Outbound + Pengiriman
+// Inbound + Outbound + Pengiriman (REALTIME + FOTO)
 // ============================================
 
-import React, { useState, useMemo, Fragment } from 'react';
+import React, { useState, useEffect, useMemo, Fragment } from 'react';
 import {
   Search, ChevronDown, ChevronUp, Camera, CheckCircle2, PackageCheck,
   Truck, User, Calendar, Image as ImageIcon, Eye, AlertTriangle,
   Package, Clock, PackagePlus, PackageMinus, Send, Activity,
-  ArrowDownToLine, ArrowUpFromLine,
+  ArrowDownToLine, ArrowUpFromLine, Loader,
 } from 'lucide-react';
 import { cn, Badge, Button, Modal } from '../../components/shared';
-import { INBOUND, OUTBOUND } from '../../lib/mockData';
+import { supabase, isSupabaseEnabled } from '../../lib/supabase';
+
+// ============ HELPERS ============
 
 function formatDate(dateStr) {
   if (!dateStr) return '-';
@@ -22,10 +24,29 @@ function formatDate(dateStr) {
   });
 }
 
+function formatTime(ts) {
+  if (!ts) return '-';
+  return new Date(ts).toLocaleTimeString('id-ID', {
+    hour: '2-digit', minute: '2-digit',
+  });
+}
+
 function formatRupiah(n) {
   if (!n && n !== 0) return 'Rp 0';
-  return 'Rp ' + n.toLocaleString('id-ID');
+  return 'Rp ' + Number(n).toLocaleString('id-ID');
 }
+
+// Helper: ekstrak URL dari berbagai format photo
+function getPhotoUrl(photo) {
+  if (!photo) return null;
+  if (typeof photo === 'string') return photo;
+  if (photo?.url) return photo.url;
+  if (photo?.publicUrl) return photo.publicUrl;
+  if (photo?.src) return photo.src;
+  return null;
+}
+
+// ============ MAIN COMPONENT ============
 
 export default function LogisticsReview() {
   const [tab, setTab] = useState('inbound');
@@ -33,28 +54,125 @@ export default function LogisticsReview() {
   const [dateFilter, setDateFilter] = useState('all');
   const [expanded, setExpanded] = useState(null);
   const [detailTarget, setDetailTarget] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  const [inboundData, setInboundData] = useState([]);
+  const [outboundData, setOutboundData] = useState([]);
+
+  // ============ FETCH ============
+  const fetchLogistics = async () => {
+    if (!isSupabaseEnabled()) {
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    try {
+      const [inbRes, outRes] = await Promise.all([
+        supabase
+          .from('inbound')
+          .select('*, inbound_lines(*)')
+          .order('created_at', { ascending: false }),
+        supabase
+          .from('outbound')
+          .select('*, outbound_lines(*)')
+          .order('created_at', { ascending: false }),
+      ]);
+
+      if (inbRes.error) console.error('[logistics] inbound error:', inbRes.error);
+      if (outRes.error) console.error('[logistics] outbound error:', outRes.error);
+
+      setInboundData((inbRes.data || []).map((i) => ({
+        id: i.code || i.id,
+        supplier: i.supplier_name || i.supplier || '-',
+        date: i.date,
+        time: formatTime(i.created_at),
+        items: i.inbound_lines?.length || 0,
+        totalQty: (i.inbound_lines || []).reduce((s, l) => s + Number(l.qty || 0), 0),
+        photos: i.photos || [],
+        status: i.status || 'Pending',
+        staffName: i.staff_name || i.received_by || '-',
+        poId: i.po_id || i.po_code || null,
+        notes: i.notes,
+        lines: (i.inbound_lines || []).map((l) => ({
+          sku: l.sku,
+          name: l.name || l.product_name,
+          qty: l.qty,
+          unit: l.unit,
+        })),
+      })));
+
+      setOutboundData((outRes.data || []).map((o) => ({
+        id: o.code || o.id,
+        customer: o.customer_name || o.customer || '-',
+        driver: o.driver_name || o.driver || '-',
+        date: o.date,
+        time: formatTime(o.created_at),
+        totalQty: (o.outbound_lines || []).reduce((s, l) => s + Number(l.qty || 0), 0),
+        photos: o.photos || [],
+        status: o.status || 'Pending',
+        staffName: o.staff_name || o.packed_by || '-',
+        soId: o.so_id || o.so_code || null,
+        notes: o.notes,
+        lines: (o.outbound_lines || []).map((l) => ({
+          sku: l.sku,
+          name: l.name || l.product_name,
+          qty: l.qty,
+          unit: l.unit,
+        })),
+      })));
+    } catch (err) {
+      console.error('[logistics] fetch error:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ============ FETCH + REALTIME ============
+  useEffect(() => {
+    fetchLogistics();
+
+    if (!isSupabaseEnabled()) return;
+
+    const channel = supabase
+      .channel('logistics-review-live')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'inbound' },
+        () => fetchLogistics()
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'outbound' },
+        () => fetchLogistics()
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   // ============ SUMMARY ============
   const summary = useMemo(() => {
     const today = new Date().toISOString().slice(0, 10);
-    const inboundToday = INBOUND.filter((i) => i.date === today);
-    const outboundToday = OUTBOUND.filter((o) => o.date === today);
+    const inboundToday = inboundData.filter((i) => i.date === today);
+    const outboundToday = outboundData.filter((o) => o.date === today);
 
     return {
-      inboundTotal: INBOUND.length,
+      inboundTotal: inboundData.length,
       inboundToday: inboundToday.length,
-      inboundQty: INBOUND.reduce((s, i) => s + i.totalQty, 0),
-      outboundTotal: OUTBOUND.length,
+      inboundQty: inboundData.reduce((s, i) => s + i.totalQty, 0),
+      outboundTotal: outboundData.length,
       outboundToday: outboundToday.length,
-      outboundQty: OUTBOUND.reduce((s, o) => s + o.totalQty, 0),
-      pendingInbound: INBOUND.filter((i) => i.status === 'Pending').length,
-      pendingOutbound: OUTBOUND.filter((o) => o.status === 'Pending').length,
+      outboundQty: outboundData.reduce((s, o) => s + o.totalQty, 0),
+      pendingInbound: inboundData.filter((i) => i.status === 'Pending').length,
+      pendingOutbound: outboundData.filter((o) => o.status === 'Pending').length,
     };
-  }, []);
+  }, [inboundData, outboundData]);
 
   // ============ FILTER ============
   const filteredInbound = useMemo(() => {
-    return INBOUND.filter((i) => {
+    return inboundData.filter((i) => {
       const matchQ =
         i.id.toLowerCase().includes(q.toLowerCase()) ||
         i.supplier.toLowerCase().includes(q.toLowerCase());
@@ -67,10 +185,10 @@ export default function LogisticsReview() {
       }
       return matchQ;
     });
-  }, [q, dateFilter]);
+  }, [q, dateFilter, inboundData]);
 
   const filteredOutbound = useMemo(() => {
-    return OUTBOUND.filter((o) => {
+    return outboundData.filter((o) => {
       const matchQ =
         o.id.toLowerCase().includes(q.toLowerCase()) ||
         o.customer.toLowerCase().includes(q.toLowerCase());
@@ -83,7 +201,18 @@ export default function LogisticsReview() {
       }
       return matchQ;
     });
-  }, [q, dateFilter]);
+  }, [q, dateFilter, outboundData]);
+
+  if (loading && inboundData.length === 0 && outboundData.length === 0) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <div className="text-center">
+          <Loader className="w-8 h-8 text-brand-600 animate-spin mx-auto mb-3" />
+          <p className="text-sm text-slate-500">Memuat data logistik...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4">
@@ -172,7 +301,7 @@ export default function LogisticsReview() {
           >
             <PackagePlus className="w-4 h-4" />
             Barang Masuk
-            <Badge variant="neutral">{INBOUND.length}</Badge>
+            <Badge variant="neutral">{inboundData.length}</Badge>
           </button>
           <button
             onClick={() => { setTab('outbound'); setExpanded(null); }}
@@ -185,7 +314,7 @@ export default function LogisticsReview() {
           >
             <PackageMinus className="w-4 h-4" />
             Barang Keluar
-            <Badge variant="neutral">{OUTBOUND.length}</Badge>
+            <Badge variant="neutral">{outboundData.length}</Badge>
           </button>
           <button
             onClick={() => { setTab('shipping'); setExpanded(null); }}
@@ -267,7 +396,11 @@ export default function LogisticsReview() {
       <Modal
         open={!!detailTarget}
         onClose={() => setDetailTarget(null)}
-        title={detailTarget?.type === 'inbound' ? 'Detail Barang Masuk' : detailTarget?.type === 'shipping' ? 'Detail Pengiriman' : 'Detail Barang Keluar'}
+        title={
+          detailTarget?.type === 'inbound' ? 'Detail Barang Masuk' :
+          detailTarget?.type === 'shipping' ? 'Detail Pengiriman' :
+          'Detail Barang Keluar'
+        }
         subtitle={detailTarget?.data?.id || ''}
         size="lg"
       >
@@ -327,13 +460,31 @@ function InboundTable({ data, expanded, setExpanded, onDetail }) {
                 <td className="px-5 py-3 text-right tabular-nums font-semibold text-slate-900">
                   {inb.totalQty}
                 </td>
-                <td className="px-5 py-3 text-center">
+                <td className="px-5 py-3">
                   {inb.photos.length > 0 ? (
-                    <span className="inline-flex items-center gap-1 text-emerald-600 text-xs font-medium">
-                      <Camera className="w-3.5 h-3.5" /> {inb.photos.length}
-                    </span>
+                    <div className="flex items-center justify-center gap-1">
+                      {inb.photos.slice(0, 3).map((photo, idx) => {
+                        const url = getPhotoUrl(photo);
+                        if (!url) return null;
+                        return (
+                          <img
+                            key={idx}
+                            src={url}
+                            alt={`Foto ${idx + 1}`}
+                            className="w-8 h-8 rounded object-cover border border-slate-200 cursor-pointer hover:scale-110 transition-transform"
+                            onClick={() => window.open(url, '_blank')}
+                            onError={(e) => { e.target.style.display = 'none'; }}
+                          />
+                        );
+                      })}
+                      {inb.photos.length > 3 && (
+                        <span className="text-[10px] text-slate-500 font-medium">
+                          +{inb.photos.length - 3}
+                        </span>
+                      )}
+                    </div>
                   ) : (
-                    <span className="text-xs text-slate-400">—</span>
+                    <span className="text-xs text-slate-400 text-center block">—</span>
                   )}
                 </td>
                 <td className="px-5 py-3">
@@ -432,13 +583,31 @@ function OutboundTable({ data, expanded, setExpanded, onDetail }) {
                 <td className="px-5 py-3 text-right tabular-nums font-semibold text-slate-900">
                   {out.totalQty}
                 </td>
-                <td className="px-5 py-3 text-center">
+                <td className="px-5 py-3">
                   {out.photos.length > 0 ? (
-                    <span className="inline-flex items-center gap-1 text-emerald-600 text-xs font-medium">
-                      <Camera className="w-3.5 h-3.5" /> {out.photos.length}
-                    </span>
+                    <div className="flex items-center justify-center gap-1">
+                      {out.photos.slice(0, 3).map((photo, idx) => {
+                        const url = getPhotoUrl(photo);
+                        if (!url) return null;
+                        return (
+                          <img
+                            key={idx}
+                            src={url}
+                            alt={`Foto ${idx + 1}`}
+                            className="w-8 h-8 rounded object-cover border border-slate-200 cursor-pointer hover:scale-110 transition-transform"
+                            onClick={() => window.open(url, '_blank')}
+                            onError={(e) => { e.target.style.display = 'none'; }}
+                          />
+                        );
+                      })}
+                      {out.photos.length > 3 && (
+                        <span className="text-[10px] text-slate-500 font-medium">
+                          +{out.photos.length - 3}
+                        </span>
+                      )}
+                    </div>
                   ) : (
-                    <span className="text-xs text-slate-400">—</span>
+                    <span className="text-xs text-slate-400 text-center block">—</span>
                   )}
                 </td>
                 <td className="px-5 py-3">
@@ -490,7 +659,6 @@ function OutboundTable({ data, expanded, setExpanded, onDetail }) {
 // ============ SHIPPING TABLE ============
 
 function ShippingTable({ data, onDetail }) {
-  // Group by driver
   const drivers = useMemo(() => {
     const byDriver = {};
     data.forEach((o) => {
@@ -580,7 +748,6 @@ function DetailPanel({ target }) {
 
   return (
     <div className="space-y-4">
-      {/* Info grid */}
       <div className="grid grid-cols-2 gap-3 text-xs">
         {type === 'inbound' && (
           <>
@@ -612,26 +779,52 @@ function DetailPanel({ target }) {
         )}
       </div>
 
-      {/* Photos */}
+      {/* FOTO BARANG */}
       {data.photos && data.photos.length > 0 && (
         <div>
           <p className="text-xs font-semibold text-slate-700 mb-2 flex items-center gap-1.5">
             <Camera className="w-3.5 h-3.5" /> Foto Barang ({data.photos.length})
           </p>
-          <div className="grid grid-cols-4 gap-2">
-            {data.photos.map((url, i) => (
-              <div key={i} className="aspect-square rounded-lg overflow-hidden border border-slate-200 bg-slate-100 flex items-center justify-center">
-                <div className="text-center">
-                  <ImageIcon className="w-6 h-6 text-slate-400 mx-auto" />
-                  <p className="text-[9px] text-slate-500 mt-1">Foto {i + 1}</p>
-                </div>
-              </div>
-            ))}
+          <div className="grid grid-cols-3 gap-3">
+            {data.photos.map((photo, i) => {
+              const url = getPhotoUrl(photo);
+              if (!url) return null;
+
+              return (
+                <a
+                  key={i}
+                  href={url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="group relative aspect-square rounded-lg overflow-hidden border border-slate-200 bg-slate-100 block hover:ring-2 hover:ring-indigo-500 transition-all"
+                >
+                  <img
+                    src={url}
+                    alt={`Foto ${i + 1}`}
+                    className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                    loading="lazy"
+                    onError={(e) => {
+                      e.target.onerror = null;
+                      e.target.parentElement.innerHTML = `
+                        <div class="w-full h-full flex items-center justify-center bg-slate-100">
+                          <span class="text-[10px] text-slate-400">Gagal load</span>
+                        </div>
+                      `;
+                    }}
+                  />
+                  <div className="absolute bottom-1 right-1 bg-black/60 text-white text-[9px] px-1.5 py-0.5 rounded">
+                    {i + 1}/{data.photos.length}
+                  </div>
+                </a>
+              );
+            })}
           </div>
+          <p className="text-[10px] text-slate-500 mt-2">
+            💡 Klik foto untuk lihat ukuran penuh
+          </p>
         </div>
       )}
 
-      {/* Lines */}
       {data.lines && data.lines.length > 0 && (
         <div>
           <p className="text-xs font-semibold text-slate-700 mb-2">Daftar Barang</p>
@@ -660,7 +853,6 @@ function DetailPanel({ target }) {
         </div>
       )}
 
-      {/* Notes */}
       {data.notes && (
         <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
           <p className="text-xs font-semibold text-amber-900 mb-1">Catatan</p>
@@ -668,7 +860,6 @@ function DetailPanel({ target }) {
         </div>
       )}
 
-      {/* Read-only notice */}
       <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 flex items-start gap-2">
         <Eye className="w-3.5 h-3.5 text-slate-500 mt-0.5 flex-shrink-0" />
         <p className="text-[11px] text-slate-600">

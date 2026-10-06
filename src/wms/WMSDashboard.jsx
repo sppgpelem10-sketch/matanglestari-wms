@@ -1,11 +1,11 @@
 // src/wms/WMSDashboard.jsx
-import React, { useState, useMemo, Fragment } from 'react';
+import React, { useState, useMemo, Fragment, useEffect } from 'react';
 import {
   LayoutDashboard, Boxes, ShoppingCart, Truck, Send, Search, Plus,
   X, AlertTriangle, TrendingUp, DollarSign, Users, Activity,
   Check, FileText, Building2, ArrowUpRight, ArrowDownRight,
   MoreHorizontal, BarChart3, PackageCheck, Inbox, ChevronDown, ChevronUp,
-  Printer, PackagePlus, PackageMinus,
+  Printer, PackagePlus, PackageMinus, CheckCircle2, UserCheck, Edit3,
 } from 'lucide-react';
 import {
   cn, Badge, Button, Input, Modal, Sidebar, TopBar,
@@ -14,11 +14,17 @@ import { useSuppliers } from '../hooks/useSuppliers';
 import {
   PrintPurchaseOrder,
   PrintDeliveryNote,
+  printDocument,
 } from '../components/DocumentTemplate';
 import InboundView from './views/InboundView';
 import OutboundView from './views/OutboundView';
 import { useInventory } from '../hooks/useInventory';
-import { adjustStock } from '../lib/inventoryStore';
+import {
+  adjustStock,
+  createInventoryItem,
+  updateInventoryItem,
+  deleteInventoryItem,
+} from '../lib/inventoryStore';
 import { usePurchaseOrders } from '../hooks/usePurchaseOrders';
 import { useSalesOrders } from '../hooks/useSalesOrders';
 import {
@@ -26,7 +32,9 @@ import {
   createSalesOrder, updateSOStatus,
   generatePOCode, generateSOCode,
   createSupplier, generateSupplierCode,
+  createInboundFromPO,
 } from '../lib/orderHelpers';
+import { useTasks } from '../hooks/useTasks';
 
 // ============ DASHBOARD OVERVIEW ============
 
@@ -116,6 +124,10 @@ function InventoryView() {
   const [adjustType, setAdjustType] = useState('add');
   const [saving, setSaving] = useState(false);
 
+  const [showForm, setShowForm] = useState(false);
+  const [editTarget, setEditTarget] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+
   const filtered = useMemo(() => {
     return items.filter((it) => {
       const matchQ = it.name.toLowerCase().includes(q.toLowerCase()) ||
@@ -147,10 +159,49 @@ function InventoryView() {
     }
   };
 
+  const handleSaveItem = async (data) => {
+    setSaving(true);
+    try {
+      if (editTarget) {
+        await updateInventoryItem(editTarget.sku, data);
+        alert('✅ Barang berhasil diupdate');
+      } else {
+        await createInventoryItem(data);
+        alert('✅ Barang berhasil ditambahkan');
+      }
+      setShowForm(false);
+      setEditTarget(null);
+    } catch (err) {
+      console.error('[inventory] save error:', err);
+      alert('Gagal: ' + err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    setSaving(true);
+    try {
+      await deleteInventoryItem(deleteTarget.sku);
+      alert('✅ Barang berhasil dihapus');
+      setDeleteTarget(null);
+    } catch (err) {
+      alert('Gagal: ' + err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const getStockBadge = (stock) => {
     if (stock < 50) return <Badge variant="danger">Low</Badge>;
     if (stock < 200) return <Badge variant="warning">Medium</Badge>;
     return <Badge variant="success">Healthy</Badge>;
+  };
+
+  const formatRupiah = (n) => {
+    if (!n && n !== 0) return '-';
+    return 'Rp ' + Number(n).toLocaleString('id-ID');
   };
 
   return (
@@ -185,6 +236,9 @@ function InventoryView() {
               {f.label}
             </button>
           ))}
+          <Button icon={Plus} onClick={() => { setEditTarget(null); setShowForm(true); }}>
+            Tambah Barang
+          </Button>
         </div>
       </div>
 
@@ -196,6 +250,8 @@ function InventoryView() {
               <th className="text-left px-5 py-3 text-xs font-semibold text-slate-600 uppercase">Item Name</th>
               <th className="text-right px-5 py-3 text-xs font-semibold text-slate-600 uppercase">Stock</th>
               <th className="text-left px-5 py-3 text-xs font-semibold text-slate-600 uppercase">Unit</th>
+              <th className="text-right px-5 py-3 text-xs font-semibold text-slate-600 uppercase">Harga Jual</th>
+              <th className="text-right px-5 py-3 text-xs font-semibold text-slate-600 uppercase">Harga Beli</th>
               <th className="text-left px-5 py-3 text-xs font-semibold text-slate-600 uppercase">Status</th>
               <th className="text-right px-5 py-3 text-xs font-semibold text-slate-600 uppercase">Aksi</th>
             </tr>
@@ -203,8 +259,10 @@ function InventoryView() {
           <tbody className="divide-y divide-slate-100">
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={6} className="px-5 py-12 text-center text-slate-500 text-xs">
-                  {items.length === 0 ? 'Belum ada item di inventory' : 'Tidak ada item yang cocok'}
+                <td colSpan={8} className="px-5 py-12 text-center text-slate-500 text-xs">
+                  {items.length === 0
+                    ? 'Belum ada item di inventory. Klik "Tambah Barang" untuk mulai.'
+                    : 'Tidak ada item yang cocok'}
                 </td>
               </tr>
             )}
@@ -222,11 +280,30 @@ function InventoryView() {
                   </span>
                 </td>
                 <td className="px-5 py-3 text-slate-600">{it.unit}</td>
+                <td className="px-5 py-3 text-right tabular-nums text-slate-700">
+                  {it.selling_price > 0 ? formatRupiah(it.selling_price) : '-'}
+                </td>
+                <td className="px-5 py-3 text-right tabular-nums text-slate-700">
+                  {it.purchase_price > 0 ? formatRupiah(it.purchase_price) : '-'}
+                </td>
                 <td className="px-5 py-3">{getStockBadge(it.stock)}</td>
                 <td className="px-5 py-3 text-right">
-                  <div className="flex items-center justify-end gap-2">
+                  <div className="flex items-center justify-end gap-1">
                     <Button size="sm" variant="secondary" onClick={() => openAdjust(it)}>Restock</Button>
-                    <Button size="sm" variant="ghost" onClick={() => openAdjust(it)}>Adjust</Button>
+                    <button
+                      onClick={() => { setEditTarget(it); setShowForm(true); }}
+                      className="w-7 h-7 rounded-lg hover:bg-slate-100 inline-flex items-center justify-center"
+                      title="Edit"
+                    >
+                      <Edit3 className="w-3.5 h-3.5 text-slate-600" />
+                    </button>
+                    <button
+                      onClick={() => setDeleteTarget(it)}
+                      className="w-7 h-7 rounded-lg hover:bg-red-50 inline-flex items-center justify-center"
+                      title="Hapus"
+                    >
+                      <X className="w-3.5 h-3.5 text-red-500" />
+                    </button>
                   </div>
                 </td>
               </tr>
@@ -235,6 +312,7 @@ function InventoryView() {
         </table>
       </div>
 
+      {/* Adjust Modal */}
       <Modal
         open={!!adjustItem}
         onClose={() => setAdjustItem(null)}
@@ -282,7 +360,174 @@ function InventoryView() {
           </div>
         )}
       </Modal>
+
+      {/* Form Tambah/Edit */}
+      <InventoryFormModal
+        open={showForm}
+        onClose={() => { setShowForm(false); setEditTarget(null); }}
+        initial={editTarget}
+        onSave={handleSaveItem}
+        loading={saving}
+      />
+
+      {/* Delete Confirm */}
+      <Modal
+        open={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        title="Hapus Barang"
+        subtitle={deleteTarget ? `${deleteTarget.sku} — ${deleteTarget.name}` : ''}
+        size="sm"
+      >
+        {deleteTarget && (
+          <div className="space-y-4">
+            <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+              <p className="text-xs text-red-800">
+                Yakin mau hapus barang ini? Data akan hilang permanen.
+              </p>
+            </div>
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-200">
+              <Button variant="secondary" onClick={() => setDeleteTarget(null)}>Batal</Button>
+              <Button variant="danger" onClick={handleDelete} disabled={saving}>
+                {saving ? 'Menghapus...' : 'Hapus'}
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
+  );
+}
+
+// ============ FORM INVENTORY ============
+
+function InventoryFormModal({ open, onClose, initial, onSave, loading }) {
+  const [sku, setSku] = useState('');
+  const [name, setName] = useState('');
+  const [stock, setStock] = useState(0);
+  const [unit, setUnit] = useState('dus');
+  const [minStock, setMinStock] = useState(50);
+  const [sellingPrice, setSellingPrice] = useState(0);
+  const [purchasePrice, setPurchasePrice] = useState(0);
+
+  useEffect(() => {
+    setSku(initial?.sku || '');
+    setName(initial?.name || '');
+    setStock(initial?.stock || 0);
+    setUnit(initial?.unit || 'dus');
+    setMinStock(initial?.min_stock || 50);
+    setSellingPrice(initial?.selling_price || 0);
+    setPurchasePrice(initial?.purchase_price || 0);
+  }, [initial, open]);
+
+  const canSave = sku && name;
+
+  const handleSave = () => {
+    if (!sku || !name) return;
+    onSave({
+      sku: sku.trim().toUpperCase(),
+      name: name.trim(),
+      stock: Number(stock) || 0,
+      unit,
+      min_stock: Number(minStock) || 50,
+      selling_price: Number(sellingPrice) || 0,
+      purchase_price: Number(purchasePrice) || 0,
+    });
+  };
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={initial ? 'Edit Barang' : 'Tambah Barang Baru'}
+      subtitle="Isi data produk"
+      size="md"
+    >
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 gap-4">
+          <Input
+            label="SKU *"
+            value={sku}
+            onChange={(e) => setSku(e.target.value)}
+            placeholder="Contoh: SKU-AM-001"
+            disabled={!!initial}
+          />
+          <div>
+            <label className="block text-xs font-medium text-slate-700 mb-1.5">Unit *</label>
+            <select
+              value={unit}
+              onChange={(e) => setUnit(e.target.value)}
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+            >
+              <option value="dus">dus</option>
+              <option value="karung">karung</option>
+              <option value="pcs">pcs</option>
+              <option value="box">box</option>
+              <option value="kg">kg</option>
+            </select>
+          </div>
+        </div>
+
+        <Input
+          label="Nama Produk *"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Contoh: Minyak Goreng Sania 2L"
+        />
+
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-xs font-medium text-slate-700 mb-1.5">Stock Awal</label>
+            <input
+              type="number"
+              value={stock}
+              onChange={(e) => setStock(Number(e.target.value))}
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 tabular-nums"
+              placeholder="0"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-700 mb-1.5">Min Stock (alert)</label>
+            <input
+              type="number"
+              value={minStock}
+              onChange={(e) => setMinStock(Number(e.target.value))}
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 tabular-nums"
+              placeholder="50"
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-xs font-medium text-slate-700 mb-1.5">Harga Jual (Rp)</label>
+            <input
+              type="number"
+              value={sellingPrice}
+              onChange={(e) => setSellingPrice(Number(e.target.value))}
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 tabular-nums"
+              placeholder="0"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-700 mb-1.5">Harga Beli (Rp)</label>
+            <input
+              type="number"
+              value={purchasePrice}
+              onChange={(e) => setPurchasePrice(Number(e.target.value))}
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 tabular-nums"
+              placeholder="0"
+            />
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-2 pt-2 border-t border-slate-200">
+          <Button variant="secondary" onClick={onClose} disabled={loading}>Batal</Button>
+          <Button icon={Check} onClick={handleSave} disabled={!canSave || loading}>
+            {loading ? 'Menyimpan...' : initial ? 'Simpan Perubahan' : 'Tambah Barang'}
+          </Button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -301,7 +546,7 @@ function SalesOrdersView() {
       await createSalesOrder(data);
       await refetch();
       setShowCreate(false);
-      alert('✅ Sales Order berhasil dibuat');
+      alert('✅ Sales Order berhasil dibuat + Outbound auto-created');
     } catch (err) {
       console.error('[so] create error:', err);
       alert('Gagal: ' + err.message);
@@ -422,7 +667,7 @@ function SalesOrdersView() {
                 <p className="font-semibold text-slate-900">3 rangkap akan dicetak:</p>
                 <p>Arsip Gudang · Pelanggan · Ekspedisi</p>
               </div>
-              <Button icon={Printer} onClick={() => window.print()}>Cetak Sekarang</Button>
+              <Button icon={Printer} onClick={printDocument}>Cetak Sekarang</Button>
             </div>
             <div className="bg-slate-100 rounded-lg p-4 overflow-auto" style={{ maxHeight: '600px' }}>
               <div style={{ transform: 'scale(0.55)', transformOrigin: 'top left', width: '330mm' }}>
@@ -437,11 +682,35 @@ function SalesOrdersView() {
 }
 
 function CreateSOModal({ open, onClose, onCreate, loading }) {
+  const inventory = useInventory();
   const [customer, setCustomer] = useState('');
-  const [items, setItems] = useState([{ sku: '', name: '', qty: 1, price: 0, unit: 'dus' }]);
+  const [customerAddress, setCustomerAddress] = useState('');
+  const [customerPhone, setCustomerPhone] = useState('');
+  const [customerContact, setCustomerContact] = useState('');
+  const [items, setItems] = useState([
+    { sku: '', name: '', qty: 1, price: 0, unit: 'dus' }
+  ]);
 
   const addLine = () => setItems([...items, { sku: '', name: '', qty: 1, price: 0, unit: 'dus' }]);
   const removeLine = (i) => setItems(items.filter((_, x) => x !== i));
+
+  const updateLineSku = (i, sku) => {
+    const next = [...items];
+    const product = inventory.find((inv) => inv.sku === sku);
+    if (product) {
+      next[i] = {
+        ...next[i],
+        sku: product.sku,
+        name: product.name,
+        unit: product.unit || 'dus',
+        price: Number(product.selling_price) || next[i].price || 0,
+      };
+    } else {
+      next[i] = { ...next[i], sku: '', name: '', unit: 'dus', price: 0 };
+    }
+    setItems(next);
+  };
+
   const updateItem = (i, field, val) => {
     const next = [...items];
     next[i][field] = val;
@@ -449,77 +718,128 @@ function CreateSOModal({ open, onClose, onCreate, loading }) {
   };
 
   const total = items.reduce((s, it) => s + (it.qty * it.price), 0);
-  const canSave = customer && items.some((i) => i.name);
+  const canSave = customer && items.some((i) => i.sku && i.name && i.price > 0);
 
   const handleSave = () => {
     onCreate({
       code: generateSOCode(),
       customerName: customer,
+      customerAddress: customerAddress.trim() || null,
+      customerPhone: customerPhone.trim() || null,
+      customerContact: customerContact.trim() || null,
       date: new Date().toISOString().slice(0, 10),
       status: 'Diproses',
-      lines: items.filter((i) => i.name),
+      lines: items
+        .filter((i) => i.sku && i.name)
+        .map((i) => ({
+          sku: i.sku,
+          name: i.name,
+          qty: Number(i.qty) || 0,
+          unit: i.unit || 'dus',
+          price: Number(i.price) || 0,
+        })),
     });
+    setCustomer('');
+    setCustomerAddress('');
+    setCustomerPhone('');
+    setCustomerContact('');
+    setItems([{ sku: '', name: '', qty: 1, price: 0, unit: 'dus' }]);
   };
 
   return (
     <Modal open={open} onClose={onClose} title="Buat Sales Order Baru"
-      subtitle="Isi detail pesanan" size="lg">
+      subtitle="Pilih produk dari inventory + isi data customer" size="lg">
       <div className="space-y-5">
-        <Input
-          label="Customer"
-          icon={Building2}
-          value={customer}
+        <Input label="Nama Customer" icon={Building2} value={customer}
           onChange={(e) => setCustomer(e.target.value)}
-          placeholder="Nama customer"
-        />
+          placeholder="Contoh: Toko Makmur Jaya" />
+
+        <div className="grid grid-cols-2 gap-4">
+          <Input label="Kontak Person" value={customerContact}
+            onChange={(e) => setCustomerContact(e.target.value)}
+            placeholder="Contoh: Pak Hendra" />
+          <Input label="Nomor Telepon" value={customerPhone}
+            onChange={(e) => setCustomerPhone(e.target.value)}
+            placeholder="0812-xxxx-xxxx" />
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-slate-700 mb-1.5">Alamat Pengiriman</label>
+          <textarea value={customerAddress} onChange={(e) => setCustomerAddress(e.target.value)}
+            rows={2} placeholder="Contoh: Jl. Raya Kediri No. 45"
+            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 resize-none" />
+        </div>
 
         <div>
           <div className="flex items-center justify-between mb-2">
-            <label className="text-xs font-semibold text-slate-700">Line Items</label>
+            <label className="text-xs font-semibold text-slate-700">
+              Line Items <span className="text-slate-400 font-normal">(pilih SKU dari inventory)</span>
+            </label>
             <Button size="sm" variant="secondary" icon={Plus} onClick={addLine}>Tambah</Button>
           </div>
           <div className="border border-slate-200 rounded-lg overflow-hidden">
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-slate-50 border-b border-slate-200">
-                  <th className="text-left px-3 py-2 text-xs font-semibold text-slate-600">SKU</th>
-                  <th className="text-left px-3 py-2 text-xs font-semibold text-slate-600">Produk</th>
+                  <th className="text-left px-3 py-2 text-xs font-semibold text-slate-600 min-w-[260px]">SKU / Produk</th>
                   <th className="text-right px-3 py-2 text-xs font-semibold text-slate-600 w-20">Qty</th>
-                  <th className="text-right px-3 py-2 text-xs font-semibold text-slate-600 w-28">Harga</th>
-                  <th className="text-right px-3 py-2 text-xs font-semibold text-slate-600 w-28">Subtotal</th>
+                  <th className="text-center px-3 py-2 text-xs font-semibold text-slate-600 w-20">Unit</th>
+                  <th className="text-right px-3 py-2 text-xs font-semibold text-slate-600 w-32">Harga</th>
+                  <th className="text-right px-3 py-2 text-xs font-semibold text-slate-600 w-32">Subtotal</th>
                   <th className="w-8"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {items.map((it, i) => (
-                  <tr key={i}>
-                    <td className="px-3 py-2">
-                      <input value={it.sku} onChange={(e) => updateItem(i, 'sku', e.target.value)}
-                        placeholder="SKU-..." className="w-full text-xs font-mono border-0 focus:outline-none" />
-                    </td>
-                    <td className="px-3 py-2">
-                      <input value={it.name} onChange={(e) => updateItem(i, 'name', e.target.value)}
-                        placeholder="Nama produk..." className="w-full text-sm border-0 focus:outline-none" />
-                    </td>
-                    <td className="px-3 py-2">
-                      <input type="number" value={it.qty} onChange={(e) => updateItem(i, 'qty', +e.target.value)}
-                        className="w-full text-sm text-right border-0 focus:outline-none tabular-nums" />
-                    </td>
-                    <td className="px-3 py-2">
-                      <input type="number" value={it.price} onChange={(e) => updateItem(i, 'price', +e.target.value)}
-                        className="w-full text-sm text-right border-0 focus:outline-none tabular-nums" />
-                    </td>
-                    <td className="px-3 py-2 text-right font-semibold tabular-nums text-slate-900">
-                      Rp {(it.qty * it.price).toLocaleString('id-ID')}
-                    </td>
-                    <td className="px-2 py-2 text-right">
-                      <button onClick={() => removeLine(i)}
-                        className="w-6 h-6 rounded hover:bg-red-50 inline-flex items-center justify-center">
-                        <X className="w-3.5 h-3.5 text-red-500" />
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                {items.map((it, i) => {
+                  const selected = inventory.find((inv) => inv.sku === it.sku);
+                  const stockWarning = selected && it.qty > selected.stock;
+                  return (
+                    <tr key={i}>
+                      <td className="px-3 py-2">
+                        <select value={it.sku} onChange={(e) => updateLineSku(i, e.target.value)}
+                          className="w-full text-sm border-0 focus:outline-none bg-transparent">
+                          <option value="">-- Pilih SKU dari inventory --</option>
+                          {inventory.map((inv) => (
+                            <option key={inv.sku} value={inv.sku}>
+                              {inv.sku} — {inv.name} (stock: {inv.stock} {inv.unit})
+                            </option>
+                          ))}
+                        </select>
+                        {selected && (
+                          <p className={cn(
+                            'text-[10px] mt-0.5',
+                            stockWarning ? 'text-red-500 font-semibold' : 'text-slate-500'
+                          )}>
+                            {stockWarning
+                              ? `⚠️ Stock cuma ${selected.stock}, qty ${it.qty}`
+                              : `Stock: ${selected.stock} ${selected.unit}`}
+                          </p>
+                        )}
+                      </td>
+                      <td className="px-3 py-2">
+                        <input type="number" value={it.qty}
+                          onChange={(e) => updateItem(i, 'qty', +e.target.value)}
+                          className="w-full text-sm text-right border-0 focus:outline-none tabular-nums" min="1" />
+                      </td>
+                      <td className="px-3 py-2 text-center text-xs text-slate-600">{it.unit || 'dus'}</td>
+                      <td className="px-3 py-2">
+                        <input type="number" value={it.price}
+                          onChange={(e) => updateItem(i, 'price', +e.target.value)}
+                          placeholder="0"
+                          className="w-full text-sm text-right border-0 focus:outline-none tabular-nums" />
+                      </td>
+                      <td className="px-3 py-2 text-right font-semibold tabular-nums text-slate-900">
+                        Rp {(it.qty * it.price).toLocaleString('id-ID')}
+                      </td>
+                      <td className="px-2 py-2 text-right">
+                        <button onClick={() => removeLine(i)}
+                          className="w-6 h-6 rounded hover:bg-red-50 inline-flex items-center justify-center">
+                          <X className="w-3.5 h-3.5 text-red-500" />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
               <tfoot>
                 <tr className="bg-slate-50 border-t border-slate-200">
@@ -532,6 +852,15 @@ function CreateSOModal({ open, onClose, onCreate, loading }) {
               </tfoot>
             </table>
           </div>
+
+          {inventory.length === 0 && (
+            <div className="mt-2 flex items-start gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg">
+              <AlertTriangle className="w-3.5 h-3.5 text-amber-600 mt-0.5 flex-shrink-0" />
+              <p className="text-[11px] text-amber-800">
+                Inventory kosong. Tambah barang dulu di menu Inventory.
+              </p>
+            </div>
+          )}
         </div>
 
         <div className="flex justify-end gap-2 pt-2 border-t border-slate-200">
@@ -581,21 +910,28 @@ function PurchaseOrdersView() {
   };
 
   const handleReceive = async (po) => {
-    if (!confirm(`Terima ${po.id} dari ${po.supplier}?\n\nStok inventory akan bertambah otomatis.`)) return;
+    if (!confirm(
+      `Terima ${po.id} dari ${po.supplier}?\n\n` +
+      `Inbound akan dibuat dengan status Pending.\n` +
+      `Stok akan bertambah setelah staff gudang verifikasi + upload foto.`
+    )) return;
 
     try {
-      // Update status
       await updatePOStatus(po.uuid, 'Diterima');
-
-      // Tambah stok (import dari inventoryStore)
-      const { addStockFromInbound } = await import('../lib/inventoryStore');
-      await addStockFromInbound(po.lines, {
-        inboundId: po.id,
-        date: po.date,
+      const inbound = await createInboundFromPO({
+        id: po.uuid,
+        code: po.id,
+        supplierId: po.supplierId,
+        supplierName: po.supplier,
       });
-
       await refetch();
-      alert('✅ Barang diterima & stok ditambahkan');
+
+      let alertMsg = `✅ PO ditandai "Diterima"`;
+      if (inbound) {
+        alertMsg += `\n\n📦 Inbound otomatis dibuat: ${inbound.code}\n` +
+                    `Buka menu "Barang Masuk" untuk verifikasi + foto.`;
+      }
+      alert(alertMsg);
     } catch (err) {
       console.error('[po] receive error:', err);
       alert('Gagal: ' + err.message);
@@ -752,7 +1088,7 @@ function PurchaseOrdersView() {
                 <p className="font-semibold text-slate-900">2 rangkap akan dicetak:</p>
                 <p>Arsip Gudang · Untuk Supplier</p>
               </div>
-              <Button icon={Printer} onClick={() => window.print()}>Cetak Sekarang</Button>
+              <Button icon={Printer} onClick={printDocument}>Cetak Sekarang</Button>
             </div>
             <div className="bg-slate-100 rounded-lg p-4 overflow-auto" style={{ maxHeight: '600px' }}>
               <div style={{ transform: 'scale(0.55)', transformOrigin: 'top left', width: '210mm' }}>
@@ -767,26 +1103,38 @@ function PurchaseOrdersView() {
 }
 
 function CreatePOModal({ open, onClose, onCreate, loading }) {
+  const inventory = useInventory();
   const [supplierId, setSupplierId] = useState('');
   const [expectedDate, setExpectedDate] = useState('');
   const [lines, setLines] = useState([{ sku: '', name: '', qty: 1, price: 0, unit: 'dus' }]);
   const { suppliers, loading: suppliersLoading, refetch: refetchSuppliers } = useSuppliers();
 
-  // State buat modal tambah supplier
   const [showAddSupplier, setShowAddSupplier] = useState(false);
-  const [newSupplier, setNewSupplier] = useState({
-    name: '',
-    contactName: '',
-    phone: '',
-    email: '',
-    address: '',
-  });
+  const [newSupplier, setNewSupplier] = useState({ name: '', contactName: '', phone: '', email: '', address: '' });
   const [savingSupplier, setSavingSupplier] = useState(false);
 
   const supplier = suppliers.find((s) => s.id === supplierId);
 
   const addLine = () => setLines([...lines, { sku: '', name: '', qty: 1, price: 0, unit: 'dus' }]);
   const removeLine = (i) => setLines(lines.filter((_, x) => x !== i));
+
+  const updateLineSku = (i, sku) => {
+    const next = [...lines];
+    const product = inventory.find((inv) => inv.sku === sku);
+    if (product) {
+      next[i] = {
+        ...next[i],
+        sku: product.sku,
+        name: product.name,
+        unit: product.unit || 'dus',
+        price: Number(product.purchase_price) || next[i].price || 0,
+      };
+    } else {
+      next[i] = { ...next[i], sku: '', name: '', unit: 'dus', price: 0 };
+    }
+    setLines(next);
+  };
+
   const updateLine = (i, field, val) => {
     const next = [...lines];
     next[i][field] = val;
@@ -794,7 +1142,7 @@ function CreatePOModal({ open, onClose, onCreate, loading }) {
   };
 
   const total = lines.reduce((s, l) => s + (l.qty * l.price), 0);
-  const canSave = supplierId && lines.some((l) => l.name);
+  const canSave = supplierId && lines.some((l) => l.sku && l.name);
 
   const handleSave = () => {
     if (!supplierId || !supplier) return;
@@ -805,17 +1153,23 @@ function CreatePOModal({ open, onClose, onCreate, loading }) {
       date: new Date().toISOString().slice(0, 10),
       expectedDate: expectedDate || null,
       status: 'Draft',
-      lines: lines.filter((l) => l.name),
+      lines: lines
+        .filter((l) => l.sku && l.name)
+        .map((l) => ({
+          sku: l.sku,
+          name: l.name,
+          qty: Number(l.qty) || 0,
+          unit: l.unit || 'dus',
+          price: Number(l.price) || 0,
+        })),
     });
   };
 
-  // Handle tambah supplier baru
   const handleAddSupplier = async () => {
     if (!newSupplier.name) {
       alert('Nama supplier wajib diisi');
       return;
     }
-
     setSavingSupplier(true);
     try {
       const created = await createSupplier({
@@ -826,19 +1180,12 @@ function CreatePOModal({ open, onClose, onCreate, loading }) {
         email: newSupplier.email,
         address: newSupplier.address,
       });
-
-      // Refetch suppliers biar dropdown update
       await refetchSuppliers();
-
-      // Auto-select supplier baru
       setSupplierId(created.id);
-
-      // Reset form & tutup modal
       setNewSupplier({ name: '', contactName: '', phone: '', email: '', address: '' });
       setShowAddSupplier(false);
       alert(`✅ Supplier "${created.name}" berhasil ditambahkan`);
     } catch (err) {
-      console.error('[supplier] create error:', err);
       alert('Gagal menambah supplier: ' + err.message);
     } finally {
       setSavingSupplier(false);
@@ -848,26 +1195,20 @@ function CreatePOModal({ open, onClose, onCreate, loading }) {
   return (
     <>
       <Modal open={open} onClose={onClose} title="Buat Purchase Order"
-        subtitle="Pilih supplier dan tambah line items" size="lg">
+        subtitle="Pilih supplier + produk dari inventory" size="lg">
         <div className="space-y-5">
           <div className="grid grid-cols-2 gap-4">
             <div>
               <div className="flex items-center justify-between mb-1.5">
                 <label className="block text-xs font-semibold text-slate-700">Supplier</label>
-                <button
-                  type="button"
-                  onClick={() => setShowAddSupplier(true)}
-                  className="text-[11px] font-medium text-brand-600 hover:text-brand-700 flex items-center gap-1"
-                >
+                <button type="button" onClick={() => setShowAddSupplier(true)}
+                  className="text-[11px] font-medium text-brand-600 hover:text-brand-700 flex items-center gap-1">
                   <Plus className="w-3 h-3" /> Tambah Supplier
                 </button>
               </div>
-              <select
-                value={supplierId}
-                onChange={(e) => setSupplierId(e.target.value)}
+              <select value={supplierId} onChange={(e) => setSupplierId(e.target.value)}
                 disabled={suppliersLoading}
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 disabled:bg-slate-50"
-              >
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 disabled:bg-slate-50">
                 <option value="">
                   {suppliersLoading ? 'Memuat supplier...' : suppliers.length === 0 ? '-- Tidak ada supplier --' : '-- Pilih supplier --'}
                 </option>
@@ -885,47 +1226,66 @@ function CreatePOModal({ open, onClose, onCreate, loading }) {
 
           <div>
             <div className="flex items-center justify-between mb-2">
-              <label className="text-xs font-semibold text-slate-700">Line Items</label>
+              <label className="text-xs font-semibold text-slate-700">
+                Line Items <span className="text-slate-400 font-normal">(pilih SKU dari inventory)</span>
+              </label>
               <Button size="sm" variant="secondary" icon={Plus} onClick={addLine}>Tambah</Button>
             </div>
             <div className="border border-slate-200 rounded-lg overflow-hidden">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-slate-50 border-b border-slate-200">
-                    <th className="text-left px-3 py-2 text-xs font-semibold text-slate-600">SKU</th>
-                    <th className="text-left px-3 py-2 text-xs font-semibold text-slate-600">Nama</th>
+                    <th className="text-left px-3 py-2 text-xs font-semibold text-slate-600 min-w-[260px]">SKU / Produk</th>
                     <th className="text-right px-3 py-2 text-xs font-semibold text-slate-600 w-20">Qty</th>
-                    <th className="text-right px-3 py-2 text-xs font-semibold text-slate-600 w-28">Harga</th>
+                    <th className="text-center px-3 py-2 text-xs font-semibold text-slate-600 w-20">Unit</th>
+                    <th className="text-right px-3 py-2 text-xs font-semibold text-slate-600 w-32">Harga Beli</th>
+                    <th className="text-right px-3 py-2 text-xs font-semibold text-slate-600 w-32">Subtotal</th>
                     <th className="w-8"></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {lines.map((l, i) => (
-                    <tr key={i}>
-                      <td className="px-3 py-2">
-                        <input value={l.sku} onChange={(e) => updateLine(i, 'sku', e.target.value)}
-                          placeholder="SKU-..." className="w-full text-xs font-mono border-0 focus:outline-none" />
-                      </td>
-                      <td className="px-3 py-2">
-                        <input value={l.name} onChange={(e) => updateLine(i, 'name', e.target.value)}
-                          placeholder="Nama produk..." className="w-full text-sm border-0 focus:outline-none" />
-                      </td>
-                      <td className="px-3 py-2">
-                        <input type="number" value={l.qty} onChange={(e) => updateLine(i, 'qty', +e.target.value)}
-                          className="w-full text-sm text-right border-0 focus:outline-none tabular-nums" />
-                      </td>
-                      <td className="px-3 py-2">
-                        <input type="number" value={l.price} onChange={(e) => updateLine(i, 'price', +e.target.value)}
-                          className="w-full text-sm text-right border-0 focus:outline-none tabular-nums" />
-                      </td>
-                      <td className="px-2 py-2 text-right">
-                        <button onClick={() => removeLine(i)}
-                          className="w-6 h-6 rounded hover:bg-red-50 inline-flex items-center justify-center">
-                          <X className="w-3.5 h-3.5 text-red-500" />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                  {lines.map((l, i) => {
+                    const selected = inventory.find((inv) => inv.sku === l.sku);
+                    return (
+                      <tr key={i}>
+                        <td className="px-3 py-2">
+                          <select value={l.sku} onChange={(e) => updateLineSku(i, e.target.value)}
+                            className="w-full text-sm border-0 focus:outline-none bg-transparent">
+                            <option value="">-- Pilih SKU dari inventory --</option>
+                            {inventory.map((inv) => (
+                              <option key={inv.sku} value={inv.sku}>
+                                {inv.sku} — {inv.name} (stock: {inv.stock} {inv.unit})
+                              </option>
+                            ))}
+                          </select>
+                          {selected && (
+                            <p className="text-[10px] mt-0.5 text-slate-500">
+                              Stock saat ini: {selected.stock} {selected.unit}
+                            </p>
+                          )}
+                        </td>
+                        <td className="px-3 py-2">
+                          <input type="number" value={l.qty} onChange={(e) => updateLine(i, 'qty', +e.target.value)}
+                            className="w-full text-sm text-right border-0 focus:outline-none tabular-nums" min="1" />
+                        </td>
+                        <td className="px-3 py-2 text-center text-xs text-slate-600">{l.unit || 'dus'}</td>
+                        <td className="px-3 py-2">
+                          <input type="number" value={l.price} onChange={(e) => updateLine(i, 'price', +e.target.value)}
+                            placeholder="0"
+                            className="w-full text-sm text-right border-0 focus:outline-none tabular-nums" />
+                        </td>
+                        <td className="px-3 py-2 text-right font-semibold tabular-nums text-slate-900">
+                          Rp {(l.qty * l.price).toLocaleString('id-ID')}
+                        </td>
+                        <td className="px-2 py-2 text-right">
+                          <button onClick={() => removeLine(i)}
+                            className="w-6 h-6 rounded hover:bg-red-50 inline-flex items-center justify-center">
+                            <X className="w-3.5 h-3.5 text-red-500" />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
                 <tfoot>
                   <tr className="bg-slate-50 border-t border-slate-200">
@@ -949,77 +1309,32 @@ function CreatePOModal({ open, onClose, onCreate, loading }) {
         </div>
       </Modal>
 
-      {/* Modal Tambah Supplier */}
-      <Modal
-        open={showAddSupplier}
-        onClose={() => setShowAddSupplier(false)}
-        title="Tambah Supplier Baru"
-        subtitle="Isi data supplier"
-        size="md"
-      >
+      <Modal open={showAddSupplier} onClose={() => setShowAddSupplier(false)}
+        title="Tambah Supplier Baru" subtitle="Isi data supplier" size="md">
         <div className="space-y-4">
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-              Nama Supplier <span className="text-red-500">*</span>
-            </label>
-            <input
-              type="text"
-              value={newSupplier.name}
-              onChange={(e) => setNewSupplier({ ...newSupplier, name: e.target.value })}
-              placeholder="Contoh: PT Sumber Makmur"
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
-            />
-          </div>
-
+          <Input label="Nama Supplier *" value={newSupplier.name}
+            onChange={(e) => setNewSupplier({ ...newSupplier, name: e.target.value })}
+            placeholder="Contoh: PT Sumber Makmur" />
           <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1.5">Kontak Person</label>
-              <input
-                type="text"
-                value={newSupplier.contactName}
-                onChange={(e) => setNewSupplier({ ...newSupplier, contactName: e.target.value })}
-                placeholder="Nama PIC"
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1.5">Telepon</label>
-              <input
-                type="text"
-                value={newSupplier.phone}
-                onChange={(e) => setNewSupplier({ ...newSupplier, phone: e.target.value })}
-                placeholder="021-xxxxxxx"
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
-              />
-            </div>
+            <Input label="Kontak Person" value={newSupplier.contactName}
+              onChange={(e) => setNewSupplier({ ...newSupplier, contactName: e.target.value })}
+              placeholder="Nama PIC" />
+            <Input label="Telepon" value={newSupplier.phone}
+              onChange={(e) => setNewSupplier({ ...newSupplier, phone: e.target.value })}
+              placeholder="021-xxxxxxx" />
           </div>
-
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1.5">Email</label>
-            <input
-              type="email"
-              value={newSupplier.email}
-              onChange={(e) => setNewSupplier({ ...newSupplier, email: e.target.value })}
-              placeholder="supplier@example.com"
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
-            />
-          </div>
-
+          <Input label="Email" type="email" value={newSupplier.email}
+            onChange={(e) => setNewSupplier({ ...newSupplier, email: e.target.value })}
+            placeholder="supplier@example.com" />
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1.5">Alamat</label>
-            <textarea
-              value={newSupplier.address}
+            <textarea value={newSupplier.address}
               onChange={(e) => setNewSupplier({ ...newSupplier, address: e.target.value })}
-              rows={2}
-              placeholder="Alamat lengkap supplier"
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 resize-none"
-            />
+              rows={2} placeholder="Alamat lengkap supplier"
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 resize-none" />
           </div>
-
           <div className="flex justify-end gap-2 pt-2 border-t border-slate-200">
-            <Button variant="secondary" onClick={() => setShowAddSupplier(false)} disabled={savingSupplier}>
-              Batal
-            </Button>
+            <Button variant="secondary" onClick={() => setShowAddSupplier(false)} disabled={savingSupplier}>Batal</Button>
             <Button icon={Check} onClick={handleAddSupplier} disabled={savingSupplier || !newSupplier.name}>
               {savingSupplier ? 'Menyimpan...' : 'Simpan Supplier'}
             </Button>
@@ -1028,16 +1343,265 @@ function CreatePOModal({ open, onClose, onCreate, loading }) {
       </Modal>
     </>
   );
-}// ============ TASK DISPATCH VIEW (placeholder) ============
+}
+
+// ============ TASK DISPATCH VIEW ============
 
 function TaskDispatchView() {
-  return (
-    <div className="bg-white rounded-xl border border-slate-200 p-12 text-center">
-      <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mx-auto mb-3">
-        <Send className="w-5 h-5 text-slate-500" />
+  const { tasks, drivers, loading, error, refetch, assignTask, unassignTask } = useTasks();
+  const [assignTarget, setAssignTarget] = useState(null);
+  const [filter, setFilter] = useState('all');
+  const [saving, setSaving] = useState(false);
+
+  const filtered = useMemo(() => {
+    return tasks.filter((t) => {
+      if (filter === 'all') return true;
+      if (filter === 'pending') return t.status === 'Pending';
+      if (filter === 'in-progress') return t.status === 'In Progress';
+      if (filter === 'completed') return t.status === 'Completed';
+      if (filter === 'unassigned') return !t.assignedTo;
+      return true;
+    });
+  }, [tasks, filter]);
+
+  const handleAssign = async (driver) => {
+    if (!assignTarget) return;
+    setSaving(true);
+    try {
+      await assignTask(assignTarget.uuid, driver.id, driver.full_name);
+      setAssignTarget(null);
+      alert(`✅ Task ${assignTarget.id} di-assign ke ${driver.full_name}`);
+    } catch (err) {
+      alert('Gagal: ' + err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleUnassign = async (task) => {
+    if (!confirm(`Unassign task ${task.id} dari ${task.assignedToName}?`)) return;
+    try {
+      await unassignTask(task.uuid);
+    } catch (err) {
+      alert('Gagal: ' + err.message);
+    }
+  };
+
+  if (loading && tasks.length === 0) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <div className="text-center">
+          <div className="w-8 h-8 border-2 border-brand-600 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+          <p className="text-sm text-slate-500">Memuat task...</p>
+        </div>
       </div>
-      <p className="text-sm font-semibold text-slate-900">Task Dispatch</p>
-      <p className="text-xs text-slate-500 mt-1">Belum ada task untuk di-dispatch</p>
+    );
+  }
+
+  const stats = {
+    total: tasks.length,
+    pending: tasks.filter((t) => t.status === 'Pending').length,
+    inProgress: tasks.filter((t) => t.status === 'In Progress').length,
+    completed: tasks.filter((t) => t.status === 'Completed').length,
+    unassigned: tasks.filter((t) => !t.assignedTo && t.status !== 'Completed').length,
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <button onClick={refetch}
+          className="w-9 h-9 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 flex items-center justify-center">
+          <Activity className="w-4 h-4 text-slate-600" />
+        </button>
+        <div className="flex items-center gap-2">
+          {[
+            { id: 'all', label: 'Semua' },
+            { id: 'unassigned', label: 'Belum Assign' },
+            { id: 'pending', label: 'Pending' },
+            { id: 'in-progress', label: 'In Progress' },
+            { id: 'completed', label: 'Selesai' },
+          ].map((f) => (
+            <button key={f.id} onClick={() => setFilter(f.id)}
+              className={cn(
+                'px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors',
+                filter === f.id
+                  ? 'bg-slate-900 text-white border-slate-900'
+                  : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'
+              )}>
+              {f.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {error && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-xs text-red-800">
+          ⚠️ Error: {error}
+        </div>
+      )}
+
+      <div className="grid grid-cols-5 gap-4">
+        <div className="bg-white rounded-xl border border-slate-200 p-4">
+          <div className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center mb-2">
+            <FileText className="w-4 h-4 text-slate-600" />
+          </div>
+          <p className="text-xs text-slate-500 font-medium">Total Task</p>
+          <p className="text-xl font-bold text-slate-900 mt-1 tabular-nums">{stats.total}</p>
+        </div>
+        <div className="bg-white rounded-xl border border-slate-200 p-4">
+          <div className="w-8 h-8 rounded-lg bg-amber-50 flex items-center justify-center mb-2">
+            <AlertTriangle className="w-4 h-4 text-amber-600" />
+          </div>
+          <p className="text-xs text-slate-500 font-medium">Belum Assign</p>
+          <p className="text-xl font-bold text-amber-600 mt-1 tabular-nums">{stats.unassigned}</p>
+        </div>
+        <div className="bg-white rounded-xl border border-slate-200 p-4">
+          <div className="w-8 h-8 rounded-lg bg-brand-50 flex items-center justify-center mb-2">
+            <Send className="w-4 h-4 text-brand-600" />
+          </div>
+          <p className="text-xs text-slate-500 font-medium">Pending</p>
+          <p className="text-xl font-bold text-brand-600 mt-1 tabular-nums">{stats.pending}</p>
+        </div>
+        <div className="bg-white rounded-xl border border-slate-200 p-4">
+          <div className="w-8 h-8 rounded-lg bg-indigo-50 flex items-center justify-center mb-2">
+            <Truck className="w-4 h-4 text-indigo-600" />
+          </div>
+          <p className="text-xs text-slate-500 font-medium">In Progress</p>
+          <p className="text-xl font-bold text-indigo-600 mt-1 tabular-nums">{stats.inProgress}</p>
+        </div>
+        <div className="bg-white rounded-xl border border-slate-200 p-4">
+          <div className="w-8 h-8 rounded-lg bg-emerald-50 flex items-center justify-center mb-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+          </div>
+          <p className="text-xs text-slate-500 font-medium">Selesai</p>
+          <p className="text-xl font-bold text-emerald-600 mt-1 tabular-nums">{stats.completed}</p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-3 gap-6">
+        <div className="col-span-2 bg-white rounded-xl border border-slate-200 overflow-hidden">
+          <div className="px-5 py-4 border-b border-slate-200">
+            <h3 className="text-sm font-semibold text-slate-900">Daftar Task</h3>
+          </div>
+          <div className="divide-y divide-slate-100">
+            {filtered.length === 0 && (
+              <div className="p-12 text-center">
+                <PackageCheck className="w-10 h-10 text-slate-300 mx-auto mb-2" />
+                <p className="text-sm font-semibold text-slate-900">Tidak ada task</p>
+                <p className="text-xs text-slate-500 mt-1">
+                  {tasks.length === 0
+                    ? 'Task auto-dibuat saat Outbound di-ship.'
+                    : 'Coba ubah filter'}
+                </p>
+              </div>
+            )}
+            {filtered.map((task) => (
+              <div key={task.id} className="px-5 py-4 hover:bg-slate-50">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1 flex-wrap">
+                      <span className="text-[10px] font-mono font-semibold text-slate-400">{task.id}</span>
+                      <Badge variant={
+                        task.status === 'Completed' ? 'success' :
+                        task.status === 'In Progress' ? 'info' : 'warning'
+                      }>{task.status}</Badge>
+                      {task.assignedToName ? (
+                        <Badge variant="info"><Users className="w-3 h-3" /> {task.assignedToName}</Badge>
+                      ) : (
+                        <Badge variant="danger"><AlertTriangle className="w-3 h-3" /> Belum assign</Badge>
+                      )}
+                    </div>
+                    <p className="text-sm font-semibold text-slate-900">{task.customer}</p>
+                    {task.address && <p className="text-xs text-slate-500 mt-1">{task.address}</p>}
+                    {task.phone && <p className="text-[10px] text-slate-400 mt-0.5">Telp: {task.phone}</p>}
+                  </div>
+                  <div className="text-right flex-shrink-0">
+                    <p className="text-xs text-slate-500 mb-2">{task.items} item</p>
+                    {!task.assignedToName && task.status !== 'Completed' && (
+                      <Button size="sm" icon={UserCheck} onClick={() => setAssignTarget(task)}>Assign</Button>
+                    )}
+                    {task.assignedToName && task.status !== 'Completed' && (
+                      <button onClick={() => handleUnassign(task)}
+                        className="text-[10px] text-red-500 hover:text-red-700 font-medium">Unassign</button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+          <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-slate-900">Driver Tersedia</h3>
+            <Badge variant="neutral">{drivers.length}</Badge>
+          </div>
+          <div className="divide-y divide-slate-100">
+            {drivers.length === 0 && (
+              <div className="p-8 text-center">
+                <Users className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+                <p className="text-xs text-slate-500">Belum ada driver</p>
+                <p className="text-[10px] text-slate-400 mt-1">
+                  Bikin di Manajemen Pekerja dengan role "worker"
+                </p>
+              </div>
+            )}
+            {drivers.map((d) => {
+              const taskCount = tasks.filter((t) => t.assignedTo === d.id && t.status !== 'Completed').length;
+              return (
+                <div key={d.id} className="flex items-center gap-3 px-5 py-3">
+                  <div className="w-9 h-9 rounded-full bg-brand-100 flex items-center justify-center text-xs font-bold text-brand-700 flex-shrink-0">
+                    {d.full_name.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase()}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-slate-900 truncate">{d.full_name}</p>
+                    <p className="text-[10px] text-slate-500">{d.position || d.division || '-'}</p>
+                  </div>
+                  <div className="text-right flex-shrink-0">
+                    <p className="text-xs font-semibold text-slate-900 tabular-nums">{taskCount}</p>
+                    <p className="text-[9px] text-slate-400">task</p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      <Modal open={!!assignTarget} onClose={() => setAssignTarget(null)}
+        title="Assign Task ke Driver"
+        subtitle={assignTarget ? `${assignTarget.id} — ${assignTarget.customer}` : ''} size="md">
+        {assignTarget && (
+          <div className="space-y-3">
+            {drivers.length === 0 ? (
+              <div className="text-center py-8">
+                <Users className="w-10 h-10 text-slate-300 mx-auto mb-2" />
+                <p className="text-sm text-slate-600">Belum ada driver tersedia</p>
+              </div>
+            ) : (
+              <>
+                <p className="text-xs text-slate-500 mb-2">Pilih driver:</p>
+                {drivers.map((d) => {
+                  const taskCount = tasks.filter((t) => t.assignedTo === d.id && t.status !== 'Completed').length;
+                  return (
+                    <button key={d.id} onClick={() => handleAssign(d)} disabled={saving}
+                      className="w-full flex items-center gap-3 p-3 rounded-lg border border-slate-200 hover:border-brand-300 hover:bg-brand-50 transition-colors text-left disabled:opacity-50">
+                      <div className="w-10 h-10 rounded-full bg-brand-100 flex items-center justify-center text-sm font-bold text-brand-700 flex-shrink-0">
+                        {d.full_name.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase()}
+                      </div>
+                      <div className="flex-1">
+                        <p className="text-sm font-medium text-slate-900">{d.full_name}</p>
+                        <p className="text-[10px] text-slate-500">{d.position || '-'} · {taskCount} task aktif</p>
+                      </div>
+                      <Send className="w-4 h-4 text-brand-600 flex-shrink-0" />
+                    </button>
+                  );
+                })}
+              </>
+            )}
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }
@@ -1061,10 +1625,7 @@ export default function WMSDashboard() {
     <div className="min-h-screen bg-[#F8FAFC] font-sans">
       <Sidebar items={navItems} active={view} setActive={setView} brand="Matang Lestari" />
       <div className="ml-60">
-        <TopBar
-          title={navItems.find((n) => n.id === view)?.label}
-          subtitle="Gudang Utama · Kediri"
-        />
+        <TopBar title={navItems.find((n) => n.id === view)?.label} subtitle="Gudang Utama · Kediri" />
         <main className="p-6">
           {view === 'dashboard' && <DashboardOverview />}
           {view === 'inventory' && <InventoryView />}

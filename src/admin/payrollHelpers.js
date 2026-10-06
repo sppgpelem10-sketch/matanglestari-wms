@@ -1,20 +1,14 @@
 // src/lib/payrollHelpers.js
 // ============================================
 // Payroll Helper — Supabase
-// - Rate harian dari tabel `profiles`
-// - Attendance dari tabel `attendance`
-// - Approval dari tabel `payroll_approvals`
 // ============================================
 
 import { supabase, isSupabaseEnabled } from '../lib/supabase';
 
-// Konfigurasi
 export const PAYROLL_CONFIG = {
   workingDaysPerMonth: 22,
   defaultDailyRate: 230000,
 };
-
-// ============ HELPER ============
 
 function getMonthRange(monthTs) {
   const ref = new Date(monthTs);
@@ -28,7 +22,7 @@ function getMonthRange(monthTs) {
   };
 }
 
-// Hitung OT dari clock-out timestamp
+// FIX: 2 parameter — clockIn + clockOut
 function calculateOvertime(clockInTs, clockOutTs) {
   if (!clockInTs || !clockOutTs) {
     return { isOT: false, roundedMinutes: 0, cost: 0 };
@@ -54,8 +48,6 @@ function startOfDay(ts) {
   return d.getTime();
 }
 
-// ============ BUILD PAYROLL ============
-
 export async function buildPayroll(monthTs = Date.now()) {
   if (!isSupabaseEnabled()) {
     return emptyPayroll(monthTs);
@@ -64,7 +56,6 @@ export async function buildPayroll(monthTs = Date.now()) {
   const range = getMonthRange(monthTs);
 
   try {
-    // 1. Ambil semua profiles aktif
     const { data: profiles, error: pErr } = await supabase
       .from('profiles')
       .select('id, full_name, employee_id, position, division, daily_rate, role, is_active')
@@ -72,7 +63,6 @@ export async function buildPayroll(monthTs = Date.now()) {
 
     if (pErr) throw pErr;
 
-    // 2. Ambil attendance bulan ini
     const { data: attendance, error: aErr } = await supabase
       .from('attendance')
       .select('worker_id, worker_name, type, timestamp')
@@ -81,7 +71,6 @@ export async function buildPayroll(monthTs = Date.now()) {
 
     if (aErr) throw aErr;
 
-    // 3. Group attendance per worker per day
     const byWorker = {};
     (attendance || []).forEach((r) => {
       if (!byWorker[r.worker_id]) {
@@ -95,7 +84,6 @@ export async function buildPayroll(monthTs = Date.now()) {
       if (r.type === 'clock-out') byWorker[r.worker_id].days[dayKey].clockOut = r;
     });
 
-    // 4. Hitung per worker
     const rows = (profiles || []).map((p) => {
       const w = byWorker[p.id] || { days: {} };
 
@@ -108,19 +96,21 @@ export async function buildPayroll(monthTs = Date.now()) {
       Object.values(w.days).forEach((d) => {
         if (d.clockIn) {
           daysPresent++;
-          // isLate flag: cek dari jam clock-in
           const ts = new Date(d.clockIn.timestamp);
           const lateThreshold = new Date(ts);
           lateThreshold.setHours(8, 15, 0, 0);
           if (ts > lateThreshold) daysLate++;
         }
         if (d.clockIn && d.clockOut) {
-  const inTs = new Date(d.clockIn.timestamp).getTime();
-  const outTs = new Date(d.clockOut.timestamp).getTime();
-  totalWorkedMs += outTs - inTs;
-  const ot = calculateOvertime(inTs, outTs);  // ← BARU: kirim 2 parameter
-  // ...
-}
+          const inTs = new Date(d.clockIn.timestamp).getTime();
+          const outTs = new Date(d.clockOut.timestamp).getTime();
+          totalWorkedMs += outTs - inTs;
+          // FIX: 2 parameter
+          const ot = calculateOvertime(inTs, outTs);
+          if (ot.isOT) {
+            totalOTMinutes += ot.roundedMinutes;
+            totalOTCost += ot.cost;
+          }
         }
       });
 
@@ -155,7 +145,6 @@ export async function buildPayroll(monthTs = Date.now()) {
     const totalOT = rows.reduce((s, r) => s + r.otPay, 0);
     const totalBase = rows.reduce((s, r) => s + r.basePay, 0);
 
-    // 5. Ambil approval status
     const { data: approval } = await supabase
       .from('payroll_approvals')
       .select('*')
@@ -192,8 +181,6 @@ function emptyPayroll(monthTs) {
     approvalData: null,
   };
 }
-
-// ============ APPROVAL ============
 
 export async function approvePayroll(monthKey, monthLabel, summary, userId) {
   if (!isSupabaseEnabled()) throw new Error('Supabase tidak aktif');
@@ -238,8 +225,6 @@ export async function resetPayrollApproval(monthKey) {
   if (error) throw error;
 }
 
-// ============ EXPORT CSV ============
-
 export function exportPayrollCSV(payroll) {
   const headers = [
     'Worker ID', 'Nama', 'Posisi', 'Divisi',
@@ -275,8 +260,6 @@ export function exportPayrollCSV(payroll) {
   link.click();
   URL.revokeObjectURL(url);
 }
-
-// ============ FORMAT ============
 
 export function formatRupiah(amount) {
   if (!amount && amount !== 0) return 'Rp 0';

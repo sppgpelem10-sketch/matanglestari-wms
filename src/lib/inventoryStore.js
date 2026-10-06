@@ -238,3 +238,69 @@ export function subscribe(listener) {
   listeners.add(listener);
   return () => listeners.delete(listener);
 }
+// ============ CREATE NEW INVENTORY ITEM ============
+
+export async function createInventoryItem(data) {
+  // data: { sku, name, stock, unit, min_stock, selling_price, purchase_price }
+  if (!isSupabaseEnabled()) throw new Error('Supabase tidak aktif');
+
+  const { data: newItem, error } = await supabase
+    .from('inventory')
+    .insert({
+      sku: data.sku,
+      name: data.name,
+      stock: Number(data.stock) || 0,
+      unit: data.unit || 'dus',
+      min_stock: Number(data.min_stock) || 50,
+      selling_price: Number(data.selling_price) || 0,
+      purchase_price: Number(data.purchase_price) || 0,
+    })
+    .select()
+    .single();
+
+  if (error) throw error;
+
+  await fetchInventory();
+  console.log('[inventory] ✅ Created item:', newItem.sku);
+  return newItem;
+}
+
+// ============ UPDATE INVENTORY ITEM ============
+
+export async function updateInventoryItem(sku, data) {
+  if (!isSupabaseEnabled()) throw new Error('Supabase tidak aktif');
+
+  const { data: updated, error } = await supabase
+    .from('inventory')
+    .update({
+      name: data.name,
+      unit: data.unit,
+      min_stock: Number(data.min_stock) || 50,
+      selling_price: Number(data.selling_price) || 0,
+      purchase_price: Number(data.purchase_price) || 0,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('sku', sku)
+    .select()
+    .single();
+
+  if (error) throw error;
+
+  await fetchInventory();
+  return updated;
+}
+
+// ============ DELETE INVENTORY ITEM ============
+
+export async function deleteInventoryItem(sku) {
+  if (!isSupabaseEnabled()) throw new Error('Supabase tidak aktif');
+
+  const { error } = await supabase
+    .from('inventory')
+    .delete()
+    .eq('sku', sku);
+
+  if (error) throw error;
+
+  await fetchInventory();
+}

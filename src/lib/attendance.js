@@ -365,14 +365,62 @@ export function calculateOvertime(clockInTs, clockOutTs) {
   };
 }
 
+export function getTodayOT(records) {
+  const today = records.filter((r) => isSameDay(r.timestamp));
+  const clockIn = today.find((r) => r.type === 'clock-in');
+  const clockOut = [...today].reverse().find((r) => r.type === 'clock-out');
+  if (!clockIn || !clockOut) {
+    return { ms: 0, minutes: 0, roundedMinutes: 0, cost: 0, isOT: false };
+  }
+  return calculateOvertime(clockIn.timestamp, clockOut.timestamp);
+}
+
+export function getMonthlyOT(records, refTs = Date.now()) {
+  const ref = new Date(refTs);
+  const monthStart = new Date(ref.getFullYear(), ref.getMonth(), 1).getTime();
+  const monthEnd = new Date(ref.getFullYear(), ref.getMonth() + 1, 0, 23, 59, 59, 999).getTime();
+
+  const monthRecords = records.filter(
+    (r) => r.timestamp >= monthStart && r.timestamp <= monthEnd
+  );
+
+  const byDay = {};
+  monthRecords.forEach((r) => {
+    const key = startOfDay(r.timestamp);
+    if (!byDay[key]) byDay[key] = { clockIn: null, clockOut: null };
+    if (r.type === 'clock-in') byDay[key].clockIn = r;
+    if (r.type === 'clock-out') byDay[key].clockOut = r;
+  });
+
+  let totalRoundedMinutes = 0;
+  let totalCost = 0;
+  let daysWithOT = 0;
+
+  Object.values(byDay).forEach((d) => {
+    if (d.clockIn && d.clockOut) {
+      const ot = calculateOvertime(
+        new Date(d.clockIn.timestamp).getTime(),
+        new Date(d.clockOut.timestamp).getTime()
+      );
+      if (ot.isOT) {
+        totalRoundedMinutes += ot.roundedMinutes;
+        totalCost += ot.cost;
+        daysWithOT++;
+      }
+    }
+  });
+
+  return {
+    roundedMinutes: totalRoundedMinutes,
+    totalMs: totalRoundedMinutes * 60 * 1000,
+    cost: totalCost,
+    daysWithOT,
+  };
+}
+
 export function formatOT(minutes) {
   if (!minutes || minutes <= 0) return '0j 0m';
   const h = Math.floor(minutes / 60);
   const m = minutes % 60;
   return `${h}j ${m}m`;
-}
-
-export function formatRupiah(amount) {
-  if (!amount) return 'Rp 0';
-  return 'Rp ' + amount.toLocaleString('id-ID');
 }

@@ -1,6 +1,6 @@
 // src/components/DocumentTemplate.jsx
 // ============================================
-// Template dokumen formal
+// Template dokumen formal + print handler
 // - PurchaseOrderDoc  → A4 portrait
 // - DeliveryNoteDoc   → ½ F4 landscape (Surat Jalan)
 // ============================================
@@ -9,11 +9,114 @@ import React from 'react';
 import { COMPANY, WAREHOUSE, DEFAULT_COURIER } from '../lib/companyConfig';
 import './PrintStyles.css';
 
+// ============ PRINT HANDLER ============
+
+/**
+ * Buka window baru + print dokumen
+ * Window baru biar CSS aplikasi utama gak ganggu
+ */
+export function printDocument() {
+  const printWindow = window.open('', '_blank', 'width=900,height=1200');
+
+  if (!printWindow) {
+    alert('⚠️ Popup diblokir browser. Izinkan popup untuk print.');
+    return;
+  }
+
+  // Ambil konten dari .doc-print-root atau .payslip-print-root
+  const docRoot =
+    document.querySelector('.doc-print-root') ||
+    document.querySelector('.payslip-print-root');
+
+  if (!docRoot) {
+    alert('⚠️ Dokumen belum ke-render. Coba ulangi.');
+    printWindow.close();
+    return;
+  }
+
+  // Ambil semua CSS dari halaman
+  let stylesHtml = '';
+  try {
+    const styles = Array.from(document.styleSheets)
+      .map((sheet) => {
+        try {
+          if (sheet.href) {
+            return `<link rel="stylesheet" href="${sheet.href}">`;
+          }
+          const rules = Array.from(sheet.cssRules || [])
+            .map((r) => r.cssText)
+            .join('\n');
+          return `<style>${rules}</style>`;
+        } catch (e) {
+          // Cross-origin stylesheet — skip
+          return '';
+        }
+      })
+      .join('\n');
+    stylesHtml = styles;
+  } catch (e) {
+    console.error('Error ambil styles:', e);
+  }
+
+  const htmlContent = docRoot.outerHTML;
+
+  const printHtml = `
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="UTF-8">
+        <title>Cetak Dokumen</title>
+        ${stylesHtml}
+        <style>
+          /* Reset untuk print window */
+          html, body {
+            margin: 0;
+            padding: 0;
+            background: white;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+          }
+          .no-print { display: none !important; }
+          .doc-print-root, .payslip-print-root {
+            transform: none !important;
+          }
+          @media print {
+            @page { margin: 8mm; }
+          }
+        </style>
+      </head>
+      <body>
+        ${htmlContent}
+      </body>
+    </html>
+  `;
+
+  printWindow.document.open();
+  printWindow.document.write(printHtml);
+  printWindow.document.close();
+
+  // Tunggu render, baru print
+  const doPrint = () => {
+    try {
+      printWindow.focus();
+      printWindow.print();
+    } catch (e) {
+      console.error('Print error:', e);
+    }
+  };
+
+  if (printWindow.document.readyState === 'complete') {
+    setTimeout(doPrint, 300);
+  } else {
+    printWindow.onload = () => setTimeout(doPrint, 300);
+  }
+}
+
 // ============ HELPERS ============
 
 function formatRupiah(n) {
   if (!n && n !== 0) return '0';
-  return n.toLocaleString('id-ID');
+  return Number(n).toLocaleString('id-ID');
 }
 
 function todayLong() {
@@ -37,14 +140,14 @@ function DocHeader({ compact = false }) {
   return (
     <div className="doc-header">
       <div className="doc-logo">
-        {COMPANY.logoUrl ? (
-          <img src={COMPANY.logoUrl} alt="Logo" />
+        {COMPANY.logoFull ? (
+          <img
+            src={COMPANY.logoFull}
+            alt={COMPANY.name}
+            onError={(e) => { e.target.style.display = 'none'; }}
+          />
         ) : (
-          <div className="doc-logo-placeholder">
-            LOGO
-            <br />
-            {compact ? '38×38' : '60×60'}
-          </div>
+          <div className="doc-logo-placeholder">LOGO</div>
         )}
       </div>
       <div className="doc-company-info">
@@ -53,8 +156,9 @@ function DocHeader({ compact = false }) {
         <p className="doc-company-detail">
           {COMPANY.address}
           <br />
-          Telp: {COMPANY.phone} · {COMPANY.email} · {COMPANY.website}
-          {COMPANY.npwp && <> · NPWP: {COMPANY.npwp}</>}
+          Telp/WA: {COMPANY.phone}
+          {COMPANY.email && <> · {COMPANY.email}</>}
+          {COMPANY.website && <> · {COMPANY.website}</>}
         </p>
       </div>
     </div>
@@ -137,10 +241,9 @@ export function PurchaseOrderDoc({
   copyLabel = 'ARSIP GUDANG',
   isOriginal = false,
 }) {
-  const watermark =
-    po.status === 'Draft' ? 'DRAFT' : po.status === 'Cancelled' ? 'VOID' : null;
+  const watermark = null;
 
-  const total = po.lines.reduce((s, l) => s + l.qty * l.price, 0);
+  const total = (po.lines || []).reduce((s, l) => s + (l.qty * l.price), 0);
 
   return (
     <div className="doc-page doc-a4">
@@ -169,8 +272,7 @@ export function PurchaseOrderDoc({
           <>
             {po.supplierAddress || 'Alamat supplier'}
             <br />
-            Attn: {po.supplierContact || 'Bagian Penjualan'} ·{' '}
-            {po.supplierPhone || '-'}
+            Attn: {po.supplierContact || 'Bagian Penjualan'} · {po.supplierPhone || '-'}
           </>
         }
       />
@@ -189,7 +291,7 @@ export function PurchaseOrderDoc({
           </tr>
         </thead>
         <tbody>
-          {po.lines.map((l, i) => (
+          {(po.lines || []).map((l, i) => (
             <tr key={i}>
               <td className="text-center">{i + 1}</td>
               <td className="mono">{l.sku}</td>
@@ -200,6 +302,13 @@ export function PurchaseOrderDoc({
               <td className="text-right">Rp {formatRupiah(l.qty * l.price)}</td>
             </tr>
           ))}
+          {(!po.lines || po.lines.length === 0) && (
+            <tr>
+              <td colSpan={7} className="text-center" style={{ padding: '12px' }}>
+                (Tidak ada item)
+              </td>
+            </tr>
+          )}
         </tbody>
         <tfoot>
           <tr className="grand-total">
@@ -216,9 +325,7 @@ export function PurchaseOrderDoc({
           <li>Pembayaran dilakukan 30 (tiga puluh) hari setelah invoice diterima.</li>
           <li>Barang reject/cacat dapat diretur maksimal 7 hari setelah penerimaan.</li>
           <li>Mohon sertakan surat jalan dan faktur pajak pada saat pengiriman.</li>
-          <li>
-            Pengiriman ditujukan ke: {WAREHOUSE.name} — {WAREHOUSE.address}
-          </li>
+          <li>Pengiriman ditujukan ke: {WAREHOUSE.name} — {WAREHOUSE.address}</li>
         </ul>
       </div>
 
@@ -236,8 +343,7 @@ export function PurchaseOrderDoc({
 }
 
 // ============================================
-// SURAT JALAN / FAKTUR JALAN — ½ F4 LANDSCAPE
-// Tanpa harga
+// SURAT JALAN — ½ F4 LANDSCAPE
 // ============================================
 
 export function DeliveryNoteDoc({
@@ -245,10 +351,9 @@ export function DeliveryNoteDoc({
   copyLabel = 'ARSIP GUDANG',
   isOriginal = false,
 }) {
-  const watermark =
-    so.status === 'Draft' ? 'DRAFT' : so.status === 'Cancelled' ? 'VOID' : null;
+  const watermark = null;
 
-  const totalQty = (so.lines || []).reduce((s, l) => s + l.qty, 0);
+  const totalQty = (so.lines || []).reduce((s, l) => s + (l.qty || 0), 0);
 
   return (
     <div className="doc-page doc-half-f4">
@@ -305,6 +410,13 @@ export function DeliveryNoteDoc({
               <td>Baik</td>
             </tr>
           ))}
+          {(!so.lines || so.lines.length === 0) && (
+            <tr>
+              <td colSpan={6} className="text-center" style={{ padding: '12px' }}>
+                (Tidak ada item)
+              </td>
+            </tr>
+          )}
         </tbody>
         <tfoot>
           <tr className="grand-total">

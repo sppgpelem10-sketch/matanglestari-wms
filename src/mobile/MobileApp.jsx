@@ -5,11 +5,9 @@ import { cn } from '../components/shared';
 import HomeTab from './HomeTab';
 import TasksTab from './TasksTab';
 import ProfileTab from './ProfileTab';
-import PODSheet from './PODSheet';
 
 export default function MobileApp() {
   const [tab, setTab] = useState('home');
-  const [podTask, setPodTask] = useState(null);
   const [now, setNow] = useState(new Date());
 
   // ticking clock buat status bar HP
@@ -41,7 +39,7 @@ export default function MobileApp() {
         {/* Content */}
         <div className="h-[700px] overflow-y-auto bg-[#F8FAFC] pb-20">
           {tab === 'home' && <HomeTab />}
-          {tab === 'tasks' && <TasksTab onFinish={setPodTask} />}
+          {tab === 'tasks' && <TasksTab />}
           {tab === 'profile' && <ProfileTab />}
         </div>
 
@@ -67,9 +65,6 @@ export default function MobileApp() {
             })}
           </div>
         </div>
-
-        {/* POD Bottom Sheet */}
-        {podTask && <PODSheet task={podTask} onClose={() => setPodTask(null)} />}
       </div>
     </div>
   );

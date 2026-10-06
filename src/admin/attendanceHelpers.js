@@ -36,9 +36,12 @@ export function buildAttendanceLog(records) {
         b.clockIn && b.clockOut
           ? b.clockOut.timestamp - b.clockIn.timestamp
           : 0;
+
+      // FIX: kirim 2 parameter (clockIn + clockOut)
       const ot = (b.clockIn && b.clockOut)
-  ? calculateOvertime(b.clockIn.timestamp, b.clockOut.timestamp)
-  : null;
+        ? calculateOvertime(b.clockIn.timestamp, b.clockOut.timestamp)
+        : null;
+
       return {
         ...b,
         workedMs,
@@ -57,8 +60,6 @@ export function buildAttendanceLog(records) {
     .sort((a, b) => b.dayTs - a.dayTs);
 }
 
-// Build OT Approvals — grup by (worker, day) dengan OT > 0
-// Approval status dari tabel ot_approvals di Supabase
 export function buildOTApprovals(records, approvalMap = {}) {
   const log = buildAttendanceLog(records);
   return log
@@ -89,13 +90,11 @@ export function buildOTApprovals(records, approvalMap = {}) {
     .sort((a, b) => b.clockOutTs - a.clockOutTs);
 }
 
-// Format rupiah
 export function formatRupiah(amount) {
   if (!amount) return 'Rp 0';
   return 'Rp ' + amount.toLocaleString('id-ID');
 }
 
-// Export ulang
 export {
   formatTime,
   formatDuration,
