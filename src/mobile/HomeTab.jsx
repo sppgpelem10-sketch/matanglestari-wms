@@ -1,5 +1,5 @@
 // src/mobile/HomeTab.jsx
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   MapPin, CheckCircle2, Clock, Fingerprint, ShieldCheck,
   PackageCheck, Calendar, AlertTriangle, RefreshCw, History,
@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { cn, Badge, Button } from '../components/shared';
 import { useAttendanceSupabase as useAttendance } from '../hooks/useAttendanceSupabase';
+import { supabase, isSupabaseEnabled } from '../lib/supabase';
 import {
   formatTime, formatTimeFull, formatDuration, formatDurationLong,
   getShiftStart, getShiftEnd, SHIFT_CONFIG,
@@ -21,6 +22,73 @@ export default function HomeTab() {
   const [toast, setToast] = useState(null);
   const [showSuccess, setShowSuccess] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+
+  // ============ STATS PENGIRIMAN (REAL) ============
+  const [shipStats, setShipStats] = useState({ done: 0, total: 0, loading: true });
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function fetchShipStats() {
+      if (!isSupabaseEnabled() || !worker?.id) {
+        if (!cancelled) setShipStats({ done: 0, total: 0, loading: false });
+        return;
+      }
+
+      try {
+        const today = new Date().toISOString().slice(0, 10);
+
+        // Ambil outbound hari ini yang terkait driver/worker ini
+        // Prioritas: driver_id → staff_id → semua outbound hari ini
+        const { data, error } = await supabase
+          .from('outbound')
+          .select('id, status, driver_id, staff_id, date')
+          .eq('date', today);
+
+        if (error) throw error;
+
+        const rows = data || [];
+
+        // Kalau ada driver_id/staff_id yang match worker, filter.
+        // Kalau tidak ada match sama sekali, tampilkan semua outbound hari ini
+        // (biar admin/owner tetap lihat angka yang masuk akal).
+        const mine = rows.filter(
+          (o) => o.driver_id === worker.id || o.staff_id === worker.id
+        );
+        const scope = mine.length > 0 ? mine : rows;
+
+        const done = scope.filter(
+          (o) => String(o.status || '').toLowerCase() === 'shipped'
+        ).length;
+
+        if (!cancelled) {
+          setShipStats({ done, total: scope.length, loading: false });
+        }
+      } catch (err) {
+        console.error('[HomeTab] fetch ship stats error:', err);
+        if (!cancelled) setShipStats({ done: 0, total: 0, loading: false });
+      }
+    }
+
+    fetchShipStats();
+
+    // Realtime — update kalau ada perubahan di outbound hari ini
+    if (!isSupabaseEnabled()) return;
+
+    const channel = supabase
+      .channel(`home-outbound-${worker?.id || 'anon'}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'outbound' },
+        () => { fetchShipStats(); }
+      )
+      .subscribe();
+
+    return () => {
+      cancelled = true;
+      supabase.removeChannel(channel);
+    };
+  }, [worker?.id]);
 
   const today = new Date(now);
   const tanggal = today.toLocaleDateString('id-ID', {
@@ -120,7 +188,7 @@ export default function HomeTab() {
         </div>
       </div>
 
-      {/* GPS INFO (netral, tanpa warning merah) */}
+      {/* GPS INFO */}
       {gps.error && gps.isMock && (
         <div className="flex items-start gap-2 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg">
           <MapPin className="w-4 h-4 text-slate-500 mt-0.5 flex-shrink-0" />
@@ -183,7 +251,6 @@ export default function HomeTab() {
           )}
         </button>
 
-        {/* Lokasi netral */}
         <div className="mt-6 flex items-center justify-between gap-2 px-3 py-2 rounded-lg bg-slate-50">
           <div className="flex items-center gap-2 flex-1 min-w-0">
             <MapPin className="w-4 h-4 flex-shrink-0 text-slate-500" />
@@ -266,8 +333,16 @@ export default function HomeTab() {
             <PackageCheck className="w-3.5 h-3.5 text-emerald-600" />
           </div>
           <p className="text-[10px] font-semibold text-slate-500 uppercase">Pengiriman</p>
-          <p className="text-xl font-bold text-slate-900 mt-0.5">3/4</p>
-          <p className="text-[10px] text-slate-400 mt-0.5">Selesai hari ini</p>
+          <p className="text-xl font-bold text-slate-900 mt-0.5 tabular-nums">
+            {shipStats.loading ? '—' : `${shipStats.done}/${shipStats.total}`}
+          </p>
+          <p className="text-[10px] text-slate-400 mt-0.5">
+            {shipStats.loading
+              ? 'Memuat...'
+              : shipStats.total === 0
+                ? 'Belum ada jadwal'
+                : 'Selesai hari ini'}
+          </p>
         </div>
       </div>
 

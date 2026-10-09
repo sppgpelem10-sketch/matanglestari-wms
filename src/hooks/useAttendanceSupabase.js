@@ -7,6 +7,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase, isSupabaseEnabled } from '../lib/supabase';
 import { useAuth } from '../lib/authContext';
+import { kirimLaporan, formatAbsenMasuk, formatAbsenPulang } from '../lib/telegram';
 import {
   OFFICE_LOCATION,
   getCurrentPosition,
@@ -59,7 +60,6 @@ export function useAttendanceSupabase() {
 
       if (error) throw error;
 
-      // Normalize ke format yang dipakai UI
       const normalized = (data || []).map((row) => ({
         id: row.id,
         workerId: row.worker_id,
@@ -92,7 +92,6 @@ export function useAttendanceSupabase() {
     }
   }, [user]);
 
-  // Initial fetch + realtime
   useEffect(() => {
     fetchRecords();
 
@@ -174,7 +173,6 @@ export function useAttendanceSupabase() {
     if (busy) return { ok: false, reason: 'busy' };
     if (!user || !profile) return { ok: false, reason: 'not-authenticated' };
 
-    // Cek udah clock in hari ini
     const today = new Date().toDateString();
     const todayIn = records.find(
       (r) =>
@@ -212,6 +210,9 @@ export function useAttendanceSupabase() {
         .single();
 
       if (error) throw error;
+
+      // 🔔 Kirim notif Telegram (absen masuk)
+      await kirimLaporan(formatAbsenMasuk(data));
 
       await fetchRecords();
       setBusy(false);
@@ -269,6 +270,9 @@ export function useAttendanceSupabase() {
 
       if (error) throw error;
 
+      // 🔔 Kirim notif Telegram (absen pulang)
+      await kirimLaporan(formatAbsenPulang(data));
+
       await fetchRecords();
       setBusy(false);
       return { ok: true, record: data };
@@ -281,7 +285,6 @@ export function useAttendanceSupabase() {
 
   // ============ DERIVED ============
 
-  // Today status
   const todayStatus = useMemo(() => {
     const today = new Date().toDateString();
     const todayRecords = records.filter(
@@ -309,7 +312,6 @@ export function useAttendanceSupabase() {
     };
   }, [records]);
 
-  // Monthly summary
   const monthlySummary = useMemo(() => {
     const ref = new Date();
     const monthStart = new Date(ref.getFullYear(), ref.getMonth(), 1).getTime();
@@ -352,7 +354,6 @@ export function useAttendanceSupabase() {
     };
   }, [records]);
 
-  // Recent days
   const recentDays = useMemo(() => {
     const byDay = {};
     records.forEach((r) => {
@@ -376,7 +377,6 @@ export function useAttendanceSupabase() {
       .slice(0, 7);
   }, [records]);
 
-  // Today OT
   const todayOT = useMemo(() => {
     if (!todayStatus.clockOut) return { isOT: false, roundedMinutes: 0, cost: 0 };
     const clockOutTs = todayStatus.clockOut.timestamp;

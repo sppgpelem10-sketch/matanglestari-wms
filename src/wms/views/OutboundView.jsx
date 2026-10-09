@@ -13,6 +13,7 @@ import { useDrivers } from '../../hooks/useDrivers';
 import { uploadPhotos } from '../../lib/storageHelpers';
 import { createTaskFromOutbound } from '../../lib/orderHelpers';
 import { supabase, isSupabaseEnabled } from '../../lib/supabase';
+import { kirimLaporan, formatOutbound } from '../../lib/telegram';
 
 function formatDate(dateStr) {
   if (!dateStr) return '-';
@@ -132,6 +133,23 @@ export default function OutboundView() {
         customerPhone: outbound.customerPhone,
         customerContact: outbound.customerContact,
       });
+
+      // 🔔 Kirim notif Telegram
+      // Catatan: `outbound` dari useOutbound pakai camelCase,
+      // jadi kita mapping dulu ke format yang dibaca formatter (snake_case)
+      await kirimLaporan(formatOutbound({
+        code: outbound.id,
+        date: outbound.date,
+        time: outbound.time,
+        customer: outbound.customer,
+        customer_address: outbound.customerAddress,
+        driver: outbound.driver,
+        items: outbound.lines?.length || 0,
+        total_qty: outbound.totalQty,
+        subtotal: outbound.subtotal,
+        staff_name: outbound.staffName,
+        notes: outbound.notes,
+      }, outbound.lines || []));
 
       await refetch();
 

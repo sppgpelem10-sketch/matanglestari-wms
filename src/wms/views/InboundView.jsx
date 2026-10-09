@@ -1,16 +1,17 @@
 // src/wms/views/InboundView.jsx
-import React, { useState, useMemo, Fragment } from 'react';
+import React, { useState, useEffect, useMemo, Fragment } from 'react';
 import {
   Search, Plus, X, ChevronDown, ChevronUp, Camera, CheckCircle2,
   PackageCheck, Image as ImageIcon, Eye, Package, Clock, Loader,
+  Link as LinkIcon, AlertTriangle, Info,
 } from 'lucide-react';
 import { cn, Badge, Button, Modal } from '../../components/shared';
-import { SUPPLIERS, PURCHASE_ORDERS } from '../../lib/mockData';
 import PhotoUploader from './PhotoUploader';
 import { addStockFromInbound } from '../../lib/inventoryStore';
 import { useInbound } from '../../hooks/useInbound';
 import { uploadPhotos } from '../../lib/storageHelpers';
 import { supabase, isSupabaseEnabled } from '../../lib/supabase';
+import { kirimLaporan, formatInbound } from '../../lib/telegram';
 
 function formatDate(dateStr) {
   if (!dateStr) return '-';
@@ -18,6 +19,11 @@ function formatDate(dateStr) {
   return d.toLocaleDateString('id-ID', {
     weekday: 'short', day: 'numeric', month: 'short', year: 'numeric',
   });
+}
+
+function formatRupiah(n) {
+  if (!n && n !== 0) return 'Rp 0';
+  return 'Rp ' + Number(n).toLocaleString('id-ID');
 }
 
 export default function InboundView() {
@@ -62,7 +68,7 @@ export default function InboundView() {
           time: data.time,
           supplier_id: data.supplierId,
           supplier_name: data.supplier,
-          po_id: data.poId,
+          po_id: data.poId || null,
           staff_name: data.staffName,
           items: data.items,
           total_qty: data.totalQty,
@@ -90,6 +96,18 @@ export default function InboundView() {
 
       if (lErr) throw lErr;
 
+      // 4. Kalau terkait PO → update status PO jadi "Dikirim" (kalau masih Draft)
+      if (data.poId) {
+        await supabase
+          .from('purchase_orders')
+          .update({ status: 'Dikirim', updated_at: new Date().toISOString() })
+          .eq('id', data.poId)
+          .eq('status', 'Draft');
+      }
+
+      // 🔔 Kirim notif Telegram
+      await kirimLaporan(formatInbound(header, linesPayload));
+
       await refetch();
       setShowForm(false);
       alert('✅ Inbound berhasil disimpan');
@@ -109,7 +127,7 @@ export default function InboundView() {
 
     setActionLoading(true);
     try {
-      // 1. Update stok inventory
+      // 1. Update stok inventory (auto-create SKU kalau belum ada)
       const stockUpdate = await addStockFromInbound(inbound.lines, {
         inboundId: inbound.id,
         date: inbound.date,
@@ -126,13 +144,23 @@ export default function InboundView() {
 
       if (error) throw error;
 
+      // 3. Auto-update status PO (kalau inbound terkait PO)
+      let poStatusMsg = '';
+      if (inbound.poId) {
+        const poStatus = await updatePoStatusFromInbound(inbound.poId);
+        poStatusMsg = `\n\n📋 Status PO diupdate: ${poStatus}`;
+      }
+
       await refetch();
       setDetailTarget(null);
 
       const lines = stockUpdate
-        .map((u) => `• ${u.sku}: ${u.before} → ${u.after} (+${u.added})`)
+        .map((u) => {
+          if (u.isNew) return `• ${u.sku}: BARU (+${u.added})`;
+          return `• ${u.sku}: ${u.before} → ${u.after} (+${u.added})`;
+        })
         .join('\n');
-      alert(`✅ Verifikasi berhasil!\n\nStok inventory bertambah:\n${lines}`);
+      alert(`✅ Verifikasi berhasil!\n\nStok inventory bertambah:\n${lines}${poStatusMsg}`);
     } catch (err) {
       console.error('[inbound] verify error:', err);
       alert('Gagal verifikasi: ' + err.message);
@@ -140,6 +168,62 @@ export default function InboundView() {
       setActionLoading(false);
     }
   };
+
+  // ============ UPDATE PO STATUS ============
+
+  async function updatePoStatusFromInbound(poId) {
+    try {
+      // Ambil semua po_lines
+      const { data: poLines } = await supabase
+        .from('po_lines')
+        .select('sku, qty')
+        .eq('po_id', poId);
+
+      if (!poLines || poLines.length === 0) return 'Tidak ada item PO';
+
+      // Ambil semua inbound terkait PO ini yang sudah Verified
+      const { data: inboundList } = await supabase
+        .from('inbound')
+        .select('id')
+        .eq('po_id', poId)
+        .eq('status', 'Verified');
+
+      const inboundIds = (inboundList || []).map((i) => i.id);
+
+      let inboundLines = [];
+      if (inboundIds.length > 0) {
+        const { data } = await supabase
+          .from('inbound_lines')
+          .select('sku, qty')
+          .in('inbound_id', inboundIds);
+        inboundLines = data || [];
+      }
+
+      // Hitung qty diterima per SKU
+      const receivedBySku = {};
+      inboundLines.forEach((l) => {
+        receivedBySku[l.sku] = (receivedBySku[l.sku] || 0) + l.qty;
+      });
+
+      // Cek apakah semua SKU sudah terpenuhi
+      const allFull = poLines.every(
+        (pl) => (receivedBySku[pl.sku] || 0) >= pl.qty
+      );
+      const anyReceived = Object.keys(receivedBySku).length > 0;
+
+      const newStatus = allFull ? 'Diterima' : anyReceived ? 'Dikirim' : 'Draft';
+
+      await supabase
+        .from('purchase_orders')
+        .update({ status: newStatus, updated_at: new Date().toISOString() })
+        .eq('id', poId);
+
+      return newStatus;
+    } catch (err) {
+      console.error('[inbound] update PO status error:', err);
+      return 'Gagal update';
+    }
+  }
 
   // ============ LOADING ============
 
@@ -246,6 +330,7 @@ export default function InboundView() {
               <th className="text-left px-5 py-3 text-xs font-semibold text-slate-600 uppercase w-8"></th>
               <th className="text-left px-5 py-3 text-xs font-semibold text-slate-600 uppercase">Inbound ID</th>
               <th className="text-left px-5 py-3 text-xs font-semibold text-slate-600 uppercase">Supplier</th>
+              <th className="text-left px-5 py-3 text-xs font-semibold text-slate-600 uppercase">Terkait PO</th>
               <th className="text-left px-5 py-3 text-xs font-semibold text-slate-600 uppercase">Tanggal</th>
               <th className="text-right px-5 py-3 text-xs font-semibold text-slate-600 uppercase">Qty</th>
               <th className="text-center px-5 py-3 text-xs font-semibold text-slate-600 uppercase">Foto</th>
@@ -256,7 +341,7 @@ export default function InboundView() {
           <tbody className="divide-y divide-slate-100">
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={8} className="px-5 py-12 text-center text-slate-500 text-xs">
+                <td colSpan={9} className="px-5 py-12 text-center text-slate-500 text-xs">
                   {inbounds.length === 0
                     ? 'Belum ada data inbound. Klik "Barang Masuk" untuk mulai.'
                     : 'Tidak ada inbound yang cocok dengan filter'}
@@ -278,6 +363,16 @@ export default function InboundView() {
                   </td>
                   <td className="px-5 py-3 font-mono text-xs font-semibold text-slate-700">{inb.id}</td>
                   <td className="px-5 py-3 font-medium text-slate-900">{inb.supplier}</td>
+                  <td className="px-5 py-3">
+                    {inb.poId ? (
+                      <span className="inline-flex items-center gap-1 text-xs font-mono text-brand-700 bg-brand-50 px-2 py-0.5 rounded">
+                        <LinkIcon className="w-3 h-3" />
+                        {inb.poId.slice(0, 8)}
+                      </span>
+                    ) : (
+                      <span className="text-xs text-slate-400">—</span>
+                    )}
+                  </td>
                   <td className="px-5 py-3">
                     <p className="text-slate-700">{formatDate(inb.date)}</p>
                     <p className="text-[10px] text-slate-500">{inb.time}</p>
@@ -354,14 +449,112 @@ export default function InboundView() {
 // ============ FORM ============
 
 function InboundForm({ onCreate, onCancel, loading }) {
+  const [suppliers, setSuppliers] = useState([]);
+  const [poList, setPoList] = useState([]);
+  const [loadingData, setLoadingData] = useState(true);
   const [supplierId, setSupplierId] = useState('');
   const [poId, setPoId] = useState('');
   const [notes, setNotes] = useState('');
   const [lines, setLines] = useState([{ sku: '', name: '', qty: 1, unit: 'dus' }]);
   const [photos, setPhotos] = useState([]);
 
-  const supplier = SUPPLIERS.find((s) => s.id === supplierId);
-  const availablePOs = PURCHASE_ORDERS.filter((po) => po.supplierId === supplierId);
+  // Load suppliers & PO dari Supabase
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      if (!isSupabaseEnabled()) {
+        setLoadingData(false);
+        return;
+      }
+      try {
+        const [supRes, poRes] = await Promise.all([
+          supabase.from('suppliers').select('id, name').order('name'),
+          supabase
+            .from('purchase_orders')
+            .select('id, code, supplier_id, supplier_name, status, date, expected_date, total, po_lines(sku, name, qty, unit, price)')
+            .in('status', ['Draft', 'Dikirim'])
+            .order('created_at', { ascending: false }),
+        ]);
+        if (!cancelled) {
+          setSuppliers(supRes.data || []);
+          setPoList(poRes.data || []);
+        }
+      } catch (err) {
+        console.error('[inbound] load suppliers/PO error:', err);
+      } finally {
+        if (!cancelled) setLoadingData(false);
+      }
+    }
+    load();
+    return () => { cancelled = true; };
+  }, []);
+
+  const supplier = suppliers.find((s) => s.id === supplierId);
+  const availablePOs = poList.filter((po) => po.supplier_id === supplierId);
+  const selectedPO = poList.find((po) => po.id === poId);
+
+  // Hitung sisa qty per SKU (kalau PO sudah pernah diterima sebagian)
+  const [receivedBySku, setReceivedBySku] = useState({});
+  useEffect(() => {
+    let cancelled = false;
+    async function loadReceived() {
+      if (!poId || !isSupabaseEnabled()) {
+        setReceivedBySku({});
+        return;
+      }
+      try {
+        const { data: inboundList } = await supabase
+          .from('inbound')
+          .select('id')
+          .eq('po_id', poId)
+          .eq('status', 'Verified');
+
+        const ids = (inboundList || []).map((i) => i.id);
+        if (ids.length === 0) {
+          if (!cancelled) setReceivedBySku({});
+          return;
+        }
+
+        const { data: linesData } = await supabase
+          .from('inbound_lines')
+          .select('sku, qty')
+          .in('inbound_id', ids);
+
+        const map = {};
+        (linesData || []).forEach((l) => {
+          map[l.sku] = (map[l.sku] || 0) + l.qty;
+        });
+        if (!cancelled) setReceivedBySku(map);
+      } catch (err) {
+        console.error('[inbound] load received error:', err);
+        if (!cancelled) setReceivedBySku({});
+      }
+    }
+    loadReceived();
+    return () => { cancelled = true; };
+  }, [poId]);
+
+  // Saat PO dipilih → auto-load lines dari po_lines
+  const handlePoChange = (newPoId) => {
+    setPoId(newPoId);
+    const po = poList.find((p) => p.id === newPoId);
+    if (po?.po_lines && po.po_lines.length > 0) {
+      const mapped = po.po_lines.map((pl) => {
+        const received = receivedBySku[pl.sku] || 0;
+        const remaining = Math.max(0, pl.qty - received);
+        return {
+          sku: pl.sku,
+          name: pl.name,
+          qty: remaining || pl.qty,
+          unit: pl.unit || 'dus',
+          _ordered: pl.qty,
+          _received: received,
+          _remaining: remaining,
+        };
+      });
+      setLines(mapped);
+    }
+  };
 
   const addLine = () => setLines([...lines, { sku: '', name: '', qty: 1, unit: 'dus' }]);
   const removeLine = (i) => setLines(lines.filter((_, x) => x !== i));
@@ -388,12 +581,21 @@ function InboundForm({ onCreate, onCancel, loading }) {
       totalQty,
       photos,
       notes: notes.trim() || null,
-      lines: lines.filter((l) => l.name),
+      lines: lines
+        .filter((l) => l.name)
+        .map(({ sku, name, qty, unit }) => ({ sku, name, qty, unit })),
     });
   };
 
   return (
     <div className="space-y-5">
+      {loadingData && (
+        <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs text-slate-600 flex items-center gap-2">
+          <Loader className="w-3.5 h-3.5 animate-spin" />
+          Memuat supplier & PO...
+        </div>
+      )}
+
       <div className="grid grid-cols-2 gap-4">
         <div>
           <label className="block text-xs font-semibold text-slate-700 mb-1.5">
@@ -401,11 +603,16 @@ function InboundForm({ onCreate, onCancel, loading }) {
           </label>
           <select
             value={supplierId}
-            onChange={(e) => { setSupplierId(e.target.value); setPoId(''); }}
-            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+            onChange={(e) => {
+              setSupplierId(e.target.value);
+              setPoId('');
+              setLines([{ sku: '', name: '', qty: 1, unit: 'dus' }]);
+            }}
+            disabled={loadingData}
+            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 disabled:bg-slate-50"
           >
             <option value="">-- Pilih supplier --</option>
-            {SUPPLIERS.map((s) => (
+            {suppliers.map((s) => (
               <option key={s.id} value={s.id}>{s.name}</option>
             ))}
           </select>
@@ -416,17 +623,39 @@ function InboundForm({ onCreate, onCancel, loading }) {
           </label>
           <select
             value={poId}
-            onChange={(e) => setPoId(e.target.value)}
-            disabled={!supplierId}
+            onChange={(e) => handlePoChange(e.target.value)}
+            disabled={!supplierId || loadingData}
             className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 disabled:bg-slate-50"
           >
             <option value="">-- Tanpa PO --</option>
             {availablePOs.map((po) => (
-              <option key={po.id} value={po.id}>{po.id}</option>
+              <option key={po.id} value={po.id}>
+                {po.code} · {po.po_lines?.length || 0} item · {po.status}
+              </option>
             ))}
           </select>
+          {availablePOs.length === 0 && supplierId && !loadingData && (
+            <p className="text-[10px] text-slate-500 mt-1">
+              Tidak ada PO status Draft/Dikirim untuk supplier ini
+            </p>
+          )}
         </div>
       </div>
+
+      {selectedPO && (
+        <div className="bg-brand-50 border border-brand-200 rounded-lg p-3 flex items-start gap-2">
+          <Info className="w-4 h-4 text-brand-600 mt-0.5 flex-shrink-0" />
+          <div className="text-[11px] text-brand-900">
+            <p className="font-semibold mb-0.5">PO {selectedPO.code}</p>
+            <p>
+              Tanggal PO: {formatDate(selectedPO.date)} · Total: {formatRupiah(selectedPO.total)} · Status: {selectedPO.status}
+            </p>
+            <p className="mt-1">
+              Item sudah di-load otomatis dari PO. Qty yang tampil = <b>sisa yang belum diterima</b>.
+            </p>
+          </div>
+        </div>
+      )}
 
       <div>
         <div className="flex items-center justify-between mb-2">
@@ -439,32 +668,47 @@ function InboundForm({ onCreate, onCancel, loading }) {
               <tr className="bg-slate-50 border-b border-slate-200">
                 <th className="text-left px-3 py-2 text-xs font-semibold text-slate-600">SKU</th>
                 <th className="text-left px-3 py-2 text-xs font-semibold text-slate-600">Nama</th>
-                <th className="text-right px-3 py-2 text-xs font-semibold text-slate-600 w-20">Qty</th>
+                <th className="text-right px-3 py-2 text-xs font-semibold text-slate-600 w-24">Qty</th>
+                <th className="text-center px-3 py-2 text-xs font-semibold text-slate-600 w-20">Sisa</th>
                 <th className="w-10"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {lines.map((l, i) => (
-                <tr key={i}>
-                  <td className="px-3 py-2">
-                    <input value={l.sku} onChange={(e) => updateLine(i, 'sku', e.target.value)}
-                      placeholder="SKU-..." className="w-full text-xs font-mono border-0 focus:outline-none" />
-                  </td>
-                  <td className="px-3 py-2">
-                    <input value={l.name} onChange={(e) => updateLine(i, 'name', e.target.value)}
-                      placeholder="Nama produk..." className="w-full text-sm border-0 focus:outline-none" />
-                  </td>
-                  <td className="px-3 py-2">
-                    <input type="number" value={l.qty} onChange={(e) => updateLine(i, 'qty', +e.target.value)}
-                      className="w-full text-sm text-right border-0 focus:outline-none tabular-nums" />
-                  </td>
-                  <td className="px-2 py-2 text-right">
-                    <button onClick={() => removeLine(i)} className="w-6 h-6 rounded hover:bg-red-50 inline-flex items-center justify-center">
-                      <X className="w-3.5 h-3.5 text-red-500" />
-                    </button>
-                  </td>
-                </tr>
-              ))}
+              {lines.map((l, i) => {
+                const remaining = l._remaining ?? null;
+                const overOrder = remaining !== null && l.qty > remaining;
+                return (
+                  <tr key={i}>
+                    <td className="px-3 py-2">
+                      <input value={l.sku} onChange={(e) => updateLine(i, 'sku', e.target.value)}
+                        placeholder="SKU-..." className="w-full text-xs font-mono border-0 focus:outline-none" />
+                    </td>
+                    <td className="px-3 py-2">
+                      <input value={l.name} onChange={(e) => updateLine(i, 'name', e.target.value)}
+                        placeholder="Nama produk..." className="w-full text-sm border-0 focus:outline-none" />
+                    </td>
+                    <td className="px-3 py-2">
+                      <input type="number" value={l.qty} onChange={(e) => updateLine(i, 'qty', +e.target.value)}
+                        className={cn(
+                          'w-full text-sm text-right border-0 focus:outline-none tabular-nums',
+                          overOrder && 'text-red-600 font-semibold'
+                        )} />
+                    </td>
+                    <td className="px-3 py-2 text-center text-[10px] text-slate-500">
+                      {remaining !== null ? (
+                        <span className={cn(overOrder && 'text-red-600 font-semibold')}>
+                          {remaining}
+                        </span>
+                      ) : '—'}
+                    </td>
+                    <td className="px-2 py-2 text-right">
+                      <button onClick={() => removeLine(i)} className="w-6 h-6 rounded hover:bg-red-50 inline-flex items-center justify-center">
+                        <X className="w-3.5 h-3.5 text-red-500" />
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -579,7 +823,8 @@ function InboundDetail({ inbound, onVerify, loading }) {
             <div>
               <p className="text-xs font-semibold text-brand-900 mb-0.5">Siap diverifikasi</p>
               <p className="text-[11px] text-brand-700">
-                Klik "Verifikasi" untuk menambahkan {inbound.totalQty} unit ke inventory.
+                Klik "Verifikasi" untuk menambahkan {inbound.totalQty} unit ke inventory
+                {inbound.poId && ' + auto-update status PO'}.
               </p>
             </div>
           </div>
