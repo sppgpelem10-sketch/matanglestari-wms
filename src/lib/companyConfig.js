@@ -14,9 +14,9 @@ export const COMPANY = {
   // Kontak
   address: 'Desa Klanderan, Kec. Plosoklaten, Kab. Kediri 64175',
   addressShort: 'Klanderan, Plosoklaten, Kediri',
-  phone: '0857-8499-3160',
-  phoneRaw: '085784993160',
-  whatsapp: '6285784993160',
+  phone: '0878-9257-0912',
+  phoneRaw: '087892570912',
+  whatsapp: '6287892570912',
   email: 'admin@matanglestari.co.id',
   website: 'www.matanglestari.co.id',
   npwp: '',
