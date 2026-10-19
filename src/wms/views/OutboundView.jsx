@@ -46,7 +46,7 @@ export default function OutboundView() {
     });
   }, [outbounds, q, filter]);
 
-  // ============ PROSES OUTBOUND (assign driver + foto) ============
+  // ============ PROSES OUTBOUND (assign driver + foto + wadah) ============
 
   const handleProcess = async (outboundUuid, data) => {
     if (!isSupabaseEnabled()) {
@@ -62,7 +62,7 @@ export default function OutboundView() {
         photoUrls = await uploadPhotos('outbound-photos', data.photos);
       }
 
-      // 2. Update outbound — set driver + foto + notes
+      // 2. Update outbound — set driver + foto + notes + wadah
       const { error } = await supabase
         .from('outbound')
         .update({
@@ -71,6 +71,7 @@ export default function OutboundView() {
           staff_name: data.staffName || null,
           photos: photoUrls,
           notes: data.notes || null,
+          wadah: data.wadah || null, // <--- SIMPAN WADAH KE DATABASE
         })
         .eq('id', outboundUuid);
 
@@ -135,8 +136,6 @@ export default function OutboundView() {
       });
 
       // 🔔 Kirim notif Telegram
-      // Catatan: `outbound` dari useOutbound pakai camelCase,
-      // jadi kita mapping dulu ke format yang dibaca formatter (snake_case)
       await kirimLaporan(formatOutbound({
         code: outbound.id,
         date: outbound.date,
@@ -149,6 +148,7 @@ export default function OutboundView() {
         subtotal: outbound.subtotal,
         staff_name: outbound.staffName,
         notes: outbound.notes,
+        wadah: outbound.wadah,
       }, outbound.lines || []));
 
       await refetch();
@@ -286,8 +286,8 @@ export default function OutboundView() {
               <th className="text-left px-5 py-3 text-xs font-semibold text-slate-600 uppercase">Customer</th>
               <th className="text-left px-5 py-3 text-xs font-semibold text-slate-600 uppercase">Driver</th>
               <th className="text-left px-5 py-3 text-xs font-semibold text-slate-600 uppercase">Tanggal</th>
+              <th className="text-left px-5 py-3 text-xs font-semibold text-slate-600 uppercase">Wadah</th>
               <th className="text-right px-5 py-3 text-xs font-semibold text-slate-600 uppercase">Qty</th>
-              <th className="text-right px-5 py-3 text-xs font-semibold text-slate-600 uppercase">Total</th>
               <th className="text-center px-5 py-3 text-xs font-semibold text-slate-600 uppercase">Foto</th>
               <th className="text-left px-5 py-3 text-xs font-semibold text-slate-600 uppercase">Status</th>
               <th className="text-right px-5 py-3 text-xs font-semibold text-slate-600 uppercase">Aksi</th>
@@ -322,11 +322,18 @@ export default function OutboundView() {
                   <p className="text-slate-700">{formatDate(out.date)}</p>
                   <p className="text-[10px] text-slate-500">{out.time}</p>
                 </td>
+                <td className="px-5 py-3">
+                  {/* TAMPILAN WADAH DI TABEL */}
+                  {out.wadah ? (
+                    <span className="inline-flex items-center gap-1 px-2 py-1 bg-amber-50 border border-amber-200 text-amber-800 rounded text-[10px] font-semibold">
+                      <Package className="w-3 h-3" /> {out.wadah}
+                    </span>
+                  ) : (
+                    <span className="text-xs text-slate-400">—</span>
+                  )}
+                </td>
                 <td className="px-5 py-3 text-right tabular-nums font-semibold text-slate-900">
                   {out.totalQty}
-                </td>
-                <td className="px-5 py-3 text-right tabular-nums text-slate-700">
-                  {formatRupiah(out.subtotal)}
                 </td>
                 <td className="px-5 py-3 text-center">
                   {out.photos.length > 0 ? (
@@ -408,6 +415,7 @@ function ProcessOutboundForm({ outbound, onSave, onCancel, loading }) {
   const { drivers, loading: driversLoading } = useDrivers();
   const [driverId, setDriverId] = useState('');
   const [notes, setNotes] = useState(outbound.notes || '');
+  const [wadah, setWadah] = useState(outbound.wadah || ''); // <--- STATE WADAH
   const [photos, setPhotos] = useState([]);
 
   const driver = drivers.find((d) => d.id === driverId);
@@ -421,6 +429,7 @@ function ProcessOutboundForm({ outbound, onSave, onCancel, loading }) {
       staffName: null,
       photos,
       notes: notes.trim() || null,
+      wadah: wadah.trim() || null, // <--- KIRIM WADAH KE FUNGSI SIMPAN
     });
   };
 
@@ -491,10 +500,24 @@ function ProcessOutboundForm({ outbound, onSave, onCancel, loading }) {
         )}
       </div>
 
+      {/* INPUT WADAH DISINI BRE */}
+      <div className="bg-amber-50 border border-amber-200 p-3 rounded-lg">
+        <label className="block text-xs font-bold text-amber-900 mb-1.5 flex items-center gap-1">
+          <Package className="w-4 h-4" /> Keterangan Wadah / Krat
+        </label>
+        <input 
+          value={wadah} 
+          onChange={(e) => setWadah(e.target.value)} 
+          placeholder="Contoh: Bawa 5 Krat Biru, 2 Krat Merah" 
+          className="w-full rounded-lg border border-amber-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 bg-white" 
+        />
+        <p className="text-[10px] text-amber-700 mt-1">Catatan ini akan muncul di tabel dan dikirim ke Telegram.</p>
+      </div>
+
       {/* SKU Table — Read-only */}
       <div>
         <label className="text-xs font-semibold text-slate-700 mb-2 block">
-          Barang Dikirim (dari SO)
+          Barang Dikirim
         </label>
         <div className="border border-slate-200 rounded-lg overflow-hidden">
           <table className="w-full text-sm">
