@@ -1,8 +1,6 @@
 // src/components/DocumentTemplate.jsx
 // ============================================
 // Template dokumen formal + print handler
-// - PurchaseOrderDoc  → A4 portrait
-// - DeliveryNoteDoc   → ½ F4 landscape (Surat Jalan)
 // ============================================
 
 import React from 'react';
@@ -11,10 +9,6 @@ import './PrintStyles.css';
 
 // ============ PRINT HANDLER ============
 
-/**
- * Buka window baru + print dokumen
- * Window baru biar CSS aplikasi utama gak ganggu
- */
 export function printDocument() {
   const printWindow = window.open('', '_blank', 'width=900,height=1200');
 
@@ -23,7 +17,6 @@ export function printDocument() {
     return;
   }
 
-  // Ambil konten dari .doc-print-root atau .payslip-print-root
   const docRoot =
     document.querySelector('.doc-print-root') ||
     document.querySelector('.payslip-print-root');
@@ -34,7 +27,6 @@ export function printDocument() {
     return;
   }
 
-  // Ambil semua CSS dari halaman
   let stylesHtml = '';
   try {
     const styles = Array.from(document.styleSheets)
@@ -48,7 +40,6 @@ export function printDocument() {
             .join('\n');
           return `<style>${rules}</style>`;
         } catch (e) {
-          // Cross-origin stylesheet — skip
           return '';
         }
       })
@@ -68,7 +59,6 @@ export function printDocument() {
         <title>Cetak Dokumen</title>
         ${stylesHtml}
         <style>
-          /* Reset untuk print window */
           html, body {
             margin: 0;
             padding: 0;
@@ -95,7 +85,6 @@ export function printDocument() {
   printWindow.document.write(printHtml);
   printWindow.document.close();
 
-  // Tunggu render, baru print
   const doPrint = () => {
     try {
       printWindow.focus();
@@ -121,17 +110,26 @@ function formatRupiah(n) {
 
 function todayLong() {
   return new Date().toLocaleDateString('id-ID', {
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
+    day: 'numeric', month: 'long', year: 'numeric',
   });
 }
 
 function timeNow() {
   return new Date().toLocaleTimeString('id-ID', {
-    hour: '2-digit',
-    minute: '2-digit',
+    hour: '2-digit', minute: '2-digit',
   });
+}
+
+// FUNGSI BARU: Format tanggal dari database ke bahasa Indonesia
+function formatTanggalIndo(dateStr) {
+  if (!dateStr) return '-';
+  try {
+    return new Date(dateStr).toLocaleDateString('id-ID', {
+      day: 'numeric', month: 'long', year: 'numeric'
+    });
+  } catch (e) {
+    return dateStr;
+  }
 }
 
 // ============ SHARED BLOCKS ============
@@ -241,15 +239,10 @@ export function PurchaseOrderDoc({
   copyLabel = 'ARSIP GUDANG',
   isOriginal = false,
 }) {
-  const watermark = null;
-
   const total = (po.lines || []).reduce((s, l) => s + (l.qty * l.price), 0);
 
   return (
     <div className="doc-page doc-a4">
-      {watermark && (
-        <div className={`doc-watermark ${watermark.toLowerCase()}`}>{watermark}</div>
-      )}
       <div className={`doc-copy-label ${isOriginal ? 'original' : ''}`}>{copyLabel}</div>
 
       <DocHeader />
@@ -259,8 +252,8 @@ export function PurchaseOrderDoc({
         subtitle="Surat Pesanan Pembelian Barang"
         metaRows={[
           { key: 'No. PO', value: po.id },
-          { key: 'Tanggal', value: po.date },
-          { key: 'Estimasi Kirim', value: po.expectedDate || '-' },
+          { key: 'Tanggal', value: formatTanggalIndo(po.date) }, // <-- Dirapikan
+          { key: 'Estimasi Kirim', value: po.expectedDate ? formatTanggalIndo(po.expectedDate) : '-' }, // <-- Dirapikan
           { key: 'Status', value: po.status },
         ]}
       />
@@ -277,7 +270,6 @@ export function PurchaseOrderDoc({
         }
       />
 
-      {/* Items table */}
       <table className="doc-table">
         <thead>
           <tr>
@@ -351,15 +343,10 @@ export function DeliveryNoteDoc({
   copyLabel = 'ARSIP GUDANG',
   isOriginal = false,
 }) {
-  const watermark = null;
-
   const totalQty = (so.lines || []).reduce((s, l) => s + (l.qty || 0), 0);
 
   return (
     <div className="doc-page doc-half-f4">
-      {watermark && (
-        <div className={`doc-watermark ${watermark.toLowerCase()}`}>{watermark}</div>
-      )}
       <div className={`doc-copy-label ${isOriginal ? 'original' : ''}`}>{copyLabel}</div>
 
       <DocHeader compact />
@@ -369,7 +356,7 @@ export function DeliveryNoteDoc({
         subtitle="Bukti Pengiriman Barang"
         metaRows={[
           { key: 'No. SO', value: so.id },
-          { key: 'Tanggal', value: so.date },
+          { key: 'Tanggal', value: formatTanggalIndo(so.date) }, // <-- Tanggal dirapikan
           { key: 'Ekspedisi', value: so.courier || DEFAULT_COURIER.name },
           { key: 'Kendaraan', value: so.vehicle || 'B 1234 XYZ' },
         ]}
@@ -383,11 +370,16 @@ export function DeliveryNoteDoc({
             {so.customerAddress || 'Alamat pengiriman pelanggan'}
             {' · '}
             Attn: {so.customerContact || 'Penerima'} · {so.customerPhone || '-'}
+            {/* TAMBAHAN: KETERANGAN WADAH KECETAK DI SINI */}
+            {so.wadah && (
+              <div style={{ marginTop: '8px', padding: '6px', backgroundColor: '#fef3c7', border: '1px solid #fcd34d', color: '#92400e', fontSize: '10pt', fontWeight: 'bold' }}>
+                Catatan Wadah / Krat: {so.wadah}
+              </div>
+            )}
           </>
         }
       />
 
-      {/* Items table — TANPA HARGA */}
       <table className="doc-table">
         <thead>
           <tr>
