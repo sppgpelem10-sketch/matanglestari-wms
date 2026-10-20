@@ -46,7 +46,7 @@ export default function OutboundView() {
     });
   }, [outbounds, q, filter]);
 
-  // ============ PROSES OUTBOUND (assign driver + foto + wadah) ============
+  // ============ PROSES OUTBOUND (assign driver + foto + wadah + tanggal) ============
 
   const handleProcess = async (outboundUuid, data) => {
     if (!isSupabaseEnabled()) {
@@ -62,7 +62,7 @@ export default function OutboundView() {
         photoUrls = await uploadPhotos('outbound-photos', data.photos);
       }
 
-      // 2. Update outbound — set driver + foto + notes + wadah
+      // 2. Update outbound — set driver + foto + notes + wadah + date
       const { error } = await supabase
         .from('outbound')
         .update({
@@ -71,7 +71,8 @@ export default function OutboundView() {
           staff_name: data.staffName || null,
           photos: photoUrls,
           notes: data.notes || null,
-          wadah: data.wadah || null, // <--- SIMPAN WADAH KE DATABASE
+          wadah: data.wadah || null,
+          date: data.date, // <--- UPDATE TANGGAL PENGIRIMAN
         })
         .eq('id', outboundUuid);
 
@@ -415,7 +416,8 @@ function ProcessOutboundForm({ outbound, onSave, onCancel, loading }) {
   const { drivers, loading: driversLoading } = useDrivers();
   const [driverId, setDriverId] = useState('');
   const [notes, setNotes] = useState(outbound.notes || '');
-  const [wadah, setWadah] = useState(outbound.wadah || ''); // <--- STATE WADAH
+  const [wadah, setWadah] = useState(outbound.wadah || ''); 
+  const [date, setDate] = useState(outbound.date || new Date().toISOString().slice(0, 10)); // <--- STATE TANGGAL
   const [photos, setPhotos] = useState([]);
 
   const driver = drivers.find((d) => d.id === driverId);
@@ -429,7 +431,8 @@ function ProcessOutboundForm({ outbound, onSave, onCancel, loading }) {
       staffName: null,
       photos,
       notes: notes.trim() || null,
-      wadah: wadah.trim() || null, // <--- KIRIM WADAH KE FUNGSI SIMPAN
+      wadah: wadah.trim() || null,
+      date: date, // <--- KIRIM TANGGAL BARU
     });
   };
 
@@ -500,7 +503,20 @@ function ProcessOutboundForm({ outbound, onSave, onCancel, loading }) {
         )}
       </div>
 
-      {/* INPUT WADAH DISINI BRE */}
+      {/* INPUT TANGGAL PENGIRIMAN */}
+      <div>
+        <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+          Tanggal Pengiriman
+        </label>
+        <input 
+          type="date"
+          value={date}
+          onChange={(e) => setDate(e.target.value)}
+          className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 bg-white" 
+        />
+      </div>
+
+      {/* INPUT WADAH */}
       <div className="bg-amber-50 border border-amber-200 p-3 rounded-lg">
         <label className="block text-xs font-bold text-amber-900 mb-1.5 flex items-center gap-1">
           <Package className="w-4 h-4" /> Keterangan Wadah / Krat
