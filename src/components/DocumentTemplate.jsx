@@ -82,20 +82,20 @@ function timeNow() {
   return new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
 }
 
-// FUNGSI FORMAT TANGGAL YANG AMAN
+// Fungsi penjinak tanggal biar gak "Invalid Date"
 function formatTanggalIndo(dateStr) {
   if (!dateStr || dateStr === 'Invalid Date') return '-';
   try {
     const d = new Date(dateStr);
-    if (isNaN(d.getTime())) return dateStr; // Kalau gagal convert, balikin teks aslinya
+    if (isNaN(d.getTime())) return dateStr; 
     return d.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' });
   } catch (e) {
     return dateStr;
   }
 }
 
-// ============ SHARED BLOCKS ============
-function DocHeader({ compact = false }) {
+// ============ SHARED BLOCKS (KOP SURAT DLL) ============
+function DocHeader() {
   return (
     <div className="doc-header">
       <div className="doc-logo">
@@ -109,7 +109,7 @@ function DocHeader({ compact = false }) {
         <h1 className="doc-company-name">{COMPANY.name}</h1>
         <p className="doc-company-tagline">{COMPANY.tagline}</p>
         <p className="doc-company-detail">
-          {COMPANY.address}<br />
+          {COMPANY.address} <br />
           Telp/WA: {COMPANY.phone} {COMPANY.email && <> · {COMPANY.email}</>}
         </p>
       </div>
@@ -187,13 +187,14 @@ function DocFooter({ docId, copyLabel }) {
 export function DeliveryNoteDoc({ so, copyLabel = 'ARSIP GUDANG', isOriginal = false }) {
   const totalQty = (so.lines || []).reduce((s, l) => s + (l.qty || 0), 0);
   
-  // Ngilangin teks "SO" dobel (misal: SO-SO-2026 jadi SO-2026)
+  // Ngilangin teks "SO" dobel
   const soId = so.id ? (so.id.startsWith('SO-SO-') ? so.id.replace('SO-SO-', 'SO-') : so.id) : '-';
 
   return (
     <div className="doc-page doc-half-f4">
       <div className={`doc-copy-label ${isOriginal ? 'original' : ''}`}>{copyLabel}</div>
-      <DocHeader compact />
+      
+      <DocHeader />
       
       <DocMeta
         title="Surat Jalan"
@@ -211,17 +212,18 @@ export function DeliveryNoteDoc({ so, copyLabel = 'ARSIP GUDANG', isOriginal = f
         name={so.customer}
         details={
           <>
-            {so.customerAddress || 'Alamat pengiriman pelanggan'} · Attn: {so.customerContact || 'Penerima'}
+            {so.customerAddress || 'Alamat pengiriman pelanggan'} <br/>
+            Attn: {so.customerContact || 'Penerima'}
             {so.wadah && (
-              <div style={{ marginTop: '6px', padding: '4px 8px', backgroundColor: '#fef3c7', border: '1px solid #fcd34d', color: '#92400e', fontSize: '9pt', fontWeight: 'bold', display: 'inline-block' }}>
-                Wadah/Krat: {so.wadah}
+              <div className="wadah-badge">
+                Catatan Wadah/Krat: {so.wadah}
               </div>
             )}
           </>
         }
       />
 
-      <table className="doc-table" style={{ tableLayout: 'fixed', width: '100%' }}>
+      <table className="doc-table">
         <thead>
           <tr>
             <th style={{ width: '6%' }} className="text-center">No</th>
@@ -243,9 +245,6 @@ export function DeliveryNoteDoc({ so, copyLabel = 'ARSIP GUDANG', isOriginal = f
               <td className="text-center">Baik</td>
             </tr>
           ))}
-          {(!so.lines || so.lines.length === 0) && (
-            <tr><td colSpan={6} className="text-center" style={{ padding: '12px' }}>(Tidak ada item)</td></tr>
-          )}
         </tbody>
         <tfoot>
           <tr className="grand-total">
@@ -256,22 +255,24 @@ export function DeliveryNoteDoc({ so, copyLabel = 'ARSIP GUDANG', isOriginal = f
         </tfoot>
       </table>
 
-      <div className="doc-notes">
-        <div className="doc-notes-title">Catatan</div>
-        <ul>
-          <li>Barang telah diperiksa & dalam kondisi baik saat diserahkan.</li>
-          <li>Mohon periksa barang sebelum menandatangani surat jalan ini.</li>
-          <li>Klaim kerusakan/kekurangan maksimal 2×24 jam setelah penerimaan.</li>
-        </ul>
+      <div className="doc-signatures">
+        <div className="doc-sign-box">
+          <div className="doc-sign-label">Pengirim,</div>
+          <div className="doc-sign-line">Admin Sari</div>
+          <div className="doc-sign-role">WMS Operator</div>
+        </div>
+        <div className="doc-sign-box">
+          <div className="doc-sign-label">Ekspedisi,</div>
+          <div className="doc-sign-line">{so.courierContact || DEFAULT_COURIER.contact}</div>
+          <div className="doc-sign-role">{so.courier || DEFAULT_COURIER.name}</div>
+        </div>
+        <div className="doc-sign-box">
+          <div className="doc-sign-label">Diterima Oleh,</div>
+          <div className="doc-sign-line">{so.customer}</div>
+          <div className="doc-sign-role">Penerima</div>
+        </div>
       </div>
 
-      <DocSignatures
-        signatures={[
-          { label: 'Pengirim,', name: 'Admin Sari', role: 'WMS Operator' },
-          { label: 'Ekspedisi,', name: so.courierContact || DEFAULT_COURIER.contact, role: so.courier || DEFAULT_COURIER.name },
-          { label: 'Diterima Oleh,', name: so.customer, role: 'Penerima' },
-        ]}
-      />
       <DocFooter docId={soId} copyLabel={copyLabel} />
     </div>
   );
